@@ -3,7 +3,11 @@
  * Optimized for Vercel serverless environment
  */
 
+import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+
+// Ensure environment variables are loaded before reading GEMINI_API_KEY
+dotenv.config();
 
 class GeminiClient {
   private apiKeys: string[];

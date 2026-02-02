@@ -1,5 +1,9 @@
+import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
+
+// Ensure environment variables are loaded before reading EMAIL_* values
+dotenv.config();
 
 // Email configuration interface
 interface EmailConfig {
