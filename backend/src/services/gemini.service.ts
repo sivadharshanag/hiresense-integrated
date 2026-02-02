@@ -145,7 +145,10 @@ export function buildEvaluationFromScoring(
     confidenceLevel: scoring.confidenceLevel,
     confidenceScore: scoring.confidenceScore,
     riskFactors: scoring.riskFactors,
-    scoringBreakdown: scoring.scoringBreakdown,
+    scoringBreakdown: {
+      ...scoring.scoringBreakdown,
+      aiReadiness: scoring.scoringBreakdown.aiReadiness,
+    },
   };
 }
 
@@ -195,6 +198,7 @@ export interface AIEvaluationResult {
     educationStrength: number;
     profileCompleteness: number;
     projectRelevance: number;
+    aiReadiness: number;
   };
 }
 
@@ -208,7 +212,7 @@ export const evaluateCandidateWithGemini = async (
   const scoringProfile = profile || buildSyntheticProfile(candidate);
   let fallbackResult: ScoringResult | null = null;
   if (jobModel && scoringProfile) {
-    fallbackResult = scoringService.evaluateCandidate(jobModel, scoringProfile);
+    fallbackResult = await scoringService.evaluateCandidate(jobModel, scoringProfile);
     console.log('✅ Fallback scoring complete:', {
       score: fallbackResult.overallScore,
       confidence: fallbackResult.confidenceLevel,
@@ -222,7 +226,7 @@ export const evaluateCandidateWithGemini = async (
     if (fallbackResult) {
       return buildEvaluationFromScoring(fallbackResult, candidate, job);
     }
-    return getFallbackEvaluation(candidate, job, jobModel);
+    return await getFallbackEvaluation(candidate, job, jobModel);
   }
 
   try {
@@ -528,7 +532,8 @@ Final Confidence: Score ≥ 70 → "High" | 50–69 → "Medium" | < 50 → "Low
         experience: evaluation.experienceScore || 0,
         educationStrength: evaluation.educationScore || 0,
         profileCompleteness: inferredProfileCompleteness,
-        projectRelevance: evaluation.projectAlignmentScore || 0
+        projectRelevance: evaluation.projectAlignmentScore || 0,
+        aiReadiness: aiOnlyScore
       }
     };
     }); // End executeWithFallback
@@ -542,7 +547,7 @@ Final Confidence: Score ≥ 70 → "High" | 50–69 → "Medium" | < 50 → "Low
     }
 
     // Fallback to basic rule-based scoring
-    return getFallbackEvaluation(candidate, job, jobModel);
+    return await getFallbackEvaluation(candidate, job, jobModel);
   }
 };
 
@@ -569,14 +574,14 @@ const generateFallbackQuestions = (
 };
 
 // Fallback evaluation when Gemini API fails
-const getFallbackEvaluation = (
+const getFallbackEvaluation = async (
   candidate: CandidateData,
   job: JobData,
   jobModel?: IJob
-): AIEvaluationResult => {
+): Promise<AIEvaluationResult> => {
   const jobForScoring = jobModel || buildSyntheticJob(job);
   const profileForScoring = buildSyntheticProfile(candidate);
-  const scoring = scoringService.evaluateCandidate(jobForScoring, profileForScoring);
+  const scoring = await scoringService.evaluateCandidate(jobForScoring, profileForScoring);
   return buildEvaluationFromScoring(scoring, candidate, job);
 };
 

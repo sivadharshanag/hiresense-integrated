@@ -1,5 +1,6 @@
 import { IApplicantProfile } from '../models/ApplicantProfile.model';
 import { IJob } from '../models/Job.model';
+import { InterviewSession } from '../models/InterviewSession.model';
 import { skillNormalizerService } from './skill-normalizer.service';
 
 export interface ScoringBreakdown {
@@ -10,6 +11,7 @@ export interface ScoringBreakdown {
   educationStrength: number;
   profileCompleteness: number;
   projectRelevance: number;
+  aiReadiness: number;
 }
 
 export interface RiskFactor {
@@ -39,15 +41,18 @@ type CategoryWeights = {
   projects: number;
   education: number;
   profile: number;
+  aiReadiness: number;
 };
 
 const categoryWeights: Record<string, CategoryWeights> = {
-  'software': { skills: 30, github: 15, leetcode: 10, experience: 20, projects: 15, education: 5, profile: 5 },
-  'data-science': { skills: 30, github: 10, leetcode: 15, experience: 20, projects: 15, education: 5, profile: 5 },
-  'qa-automation': { skills: 35, github: 10, leetcode: 10, experience: 20, projects: 15, education: 5, profile: 5 },
-  'non-technical': { skills: 40, github: 0, leetcode: 0, experience: 30, projects: 0, education: 15, profile: 15 },
-  'business': { skills: 35, github: 0, leetcode: 0, experience: 35, projects: 0, education: 15, profile: 15 }
+  'software': { skills: 25, github: 15, leetcode: 10, experience: 15, projects: 15, education: 5, profile: 5, aiReadiness: 10 },
+  'data-science': { skills: 25, github: 10, leetcode: 15, experience: 15, projects: 15, education: 5, profile: 5, aiReadiness: 10 },
+  'qa-automation': { skills: 30, github: 10, leetcode: 10, experience: 15, projects: 15, education: 5, profile: 5, aiReadiness: 10 },
+  'non-technical': { skills: 35, github: 0, leetcode: 0, experience: 25, projects: 0, education: 15, profile: 15, aiReadiness: 10 },
+  'business': { skills: 30, github: 0, leetcode: 0, experience: 30, projects: 0, education: 15, profile: 15, aiReadiness: 10 }
 };
+
+const DEFAULT_AI_READINESS_SCORE = 50;
 
 
 /**
@@ -474,10 +479,10 @@ class ScoringService {
    * Main scoring function - calculates comprehensive candidate evaluation
    * Uses context-aware weights based on job category and experience level
    */
-  evaluateCandidate(
+  async evaluateCandidate(
     job: IJob,
     profile: IApplicantProfile
-  ): ScoringResult {
+  ): Promise<ScoringResult> {
     // Get job category (default to software if not set)
     const jobCategory = (job as any).jobCategory || 'software';
     const weights = categoryWeights[jobCategory] || categoryWeights['software'];
@@ -511,6 +516,8 @@ class ScoringService {
         )
       : 0;
 
+    const aiReadiness = await this.getAiReadinessScore(profile.userId);
+
     const scoringBreakdown: ScoringBreakdown = {
       skillMatch,
       githubActivity,
@@ -518,7 +525,8 @@ class ScoringService {
       experience,
       educationStrength,
       profileCompleteness,
-      projectRelevance
+      projectRelevance,
+      aiReadiness
     };
 
     // Calculate weighted overall score using CONTEXT-AWARE weights
@@ -530,7 +538,8 @@ class ScoringService {
       experience * (weights.experience / 100) +
       projectRelevance * (weights.projects / 100) +
       educationStrength * (weights.education / 100) +
-      profileCompleteness * (weights.profile / 100)
+      profileCompleteness * (weights.profile / 100) +
+      aiReadiness * (weights.aiReadiness / 100)
     );
 
     // Calculate confidence
@@ -586,6 +595,23 @@ class ScoringService {
       gaps,
       recommendation
     };
+  }
+
+  private async getAiReadinessScore(userId: IApplicantProfile['userId']): Promise<number> {
+    if (!userId) return DEFAULT_AI_READINESS_SCORE;
+
+    const latestSession = await InterviewSession.findOne({
+      userId,
+      status: 'completed',
+      finalScore: { $exists: true }
+    }).sort({ completedAt: -1, updatedAt: -1 });
+
+    const score = latestSession?.finalScore?.aiReadinessScore;
+    if (typeof score === 'number') {
+      return Math.max(0, Math.min(100, score));
+    }
+
+    return DEFAULT_AI_READINESS_SCORE;
   }
 }
 

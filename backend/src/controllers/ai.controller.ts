@@ -218,7 +218,7 @@ export const evaluateJobApplications = async (
         }
 
         const candidatePayload = buildCandidatePayload(applicantUser, applicantProfile, application.coverLetter);
-        const scoringResult = scoringService.evaluateCandidate(job, applicantProfile);
+        const scoringResult = await scoringService.evaluateCandidate(job, applicantProfile);
         const evaluation = buildEvaluationFromScoring(scoringResult, candidatePayload, jobData);
 
         application.aiInsights = {
