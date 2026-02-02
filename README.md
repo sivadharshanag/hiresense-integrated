@@ -2,7 +2,7 @@
 
 An AI-powered recruitment platform that streamlines hiring for recruiters and job searching for applicants.
 
-*Last updated: February 2026*
+*Last updated: February 3, 2026*
 
 ## 🚀 Live Demo
 
