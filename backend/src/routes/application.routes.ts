@@ -5,6 +5,7 @@ import {
   getMyApplications,
   getApplicationById,
   getApplicationsByJob,
+  getAllApplicationsForRecruiter,
   updateApplicationStatus,
   scheduleInterview,
   generateJustification,
@@ -33,6 +34,7 @@ router.get('/:id/rejection-feedback', authorizeRole('applicant'), getRejectionFe
 router.get('/:id', getApplicationById);
 
 // Recruiter routes
+router.get('/recruiter/all', authorizeRole('recruiter'), getAllApplicationsForRecruiter);
 router.get('/recruiter/selected-candidates', authorizeRole('recruiter'), getSelectedCandidates);
 router.get('/recruiter/rejection-reasons', authorizeRole('recruiter'), getRejectionReasons);
 router.get('/job/:jobId', authorizeRole('recruiter'), getApplicationsByJob);

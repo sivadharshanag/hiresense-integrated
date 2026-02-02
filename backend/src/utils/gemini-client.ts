@@ -8,6 +8,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 class GeminiClient {
   private apiKeys: string[];
   private currentKeyIndex: number = 0;
+  private enabled: boolean;
 
   constructor() {
     // Collect all available API keys from environment
@@ -17,8 +18,11 @@ class GeminiClient {
       process.env.GEMINI_API_KEY_3,
     ].filter((key): key is string => Boolean(key));
 
-    if (this.apiKeys.length === 0) {
-      throw new Error('No Gemini API keys configured');
+    this.enabled = this.apiKeys.length > 0;
+
+    if (!this.enabled) {
+      console.warn('⚠️ Gemini client disabled: no API keys configured. Falling back to deterministic scoring.');
+      return;
     }
 
     console.log(`✅ Gemini client initialized with ${this.apiKeys.length} API key(s)`);
@@ -29,6 +33,9 @@ class GeminiClient {
    * Uses timestamp-based rotation for distributed serverless instances
    */
   private getNextKey(): string {
+    if (!this.enabled) {
+      throw new Error('Gemini client is disabled');
+    }
     // Rotate based on timestamp to distribute load across serverless instances
     const index = Math.floor(Date.now() / 60000) % this.apiKeys.length;
     return this.apiKeys[index];
@@ -38,6 +45,9 @@ class GeminiClient {
    * Create a Gemini AI instance with automatic key rotation
    */
   getClient(): GoogleGenerativeAI {
+    if (!this.enabled) {
+      throw new Error('Gemini client is disabled');
+    }
     const apiKey = this.getNextKey();
     return new GoogleGenerativeAI(apiKey);
   }
@@ -49,6 +59,9 @@ class GeminiClient {
     operation: (client: GoogleGenerativeAI) => Promise<T>,
     maxRetries: number = this.apiKeys.length
   ): Promise<T> {
+    if (!this.enabled) {
+      throw new Error('Gemini client is disabled');
+    }
     const errors: Error[] = [];
     
     // Try all available keys
@@ -96,6 +109,13 @@ class GeminiClient {
    */
   getKeyCount(): number {
     return this.apiKeys.length;
+  }
+
+  /**
+   * Whether Gemini is enabled (i.e., at least one API key is configured)
+   */
+  isEnabled(): boolean {
+    return this.enabled;
   }
 }
 

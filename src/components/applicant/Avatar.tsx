@@ -1,7 +1,7 @@
 /**
  * Avatar Component
  * 
- * This component loads and displays the Ready Player Me 3D avatar model.
+ * This component loads and displays the 3D avatar model for the AI interviewer.
  * It handles the GLB model loading and applies animations based on the current gesture state.
  */
 
@@ -10,20 +10,28 @@ import { useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { GestureState } from '@/types/avatar';
+import { AVATAR_URL, getAvatarConfig } from '@/config/avatar.config';
+import { applyVisemesToMesh, VisemeFrame } from '@/services/lipSyncEngine';
 
 // Props interface for the Avatar component
 interface AvatarProps {
   gestureState: GestureState;
+  onBounds?: (bounds: {
+    center: [number, number, number];
+    size: [number, number, number];
+    focus: [number, number, number];
+    maxDim: number;
+  }) => void;
+  // Lip sync support
+  visemes?: Record<string, number> | null;
+  enableLipSync?: boolean;
 }
 
-// URL for the Ready Player Me avatar model (local file)
-const AVATAR_URL = '/avatar.glb';
-
-export function Avatar({ gestureState }: AvatarProps) {
+export function Avatar({ gestureState, onBounds, visemes, enableLipSync = false }: AvatarProps) {
   // Load the GLB model using drei's useGLTF hook
   const { scene } = useGLTF(AVATAR_URL);
   
-  // Reference to the model group for animations
+  // Reference to the model group for animations/transforms
   const groupRef = useRef<THREE.Group>(null);
   
   // References for specific bones/meshes we'll animate
@@ -35,25 +43,90 @@ export function Avatar({ gestureState }: AvatarProps) {
   const speakingPhaseRef = useRef(0);
 
   // Find and store references to bones and morph target meshes on mount
+  const didNormalizeRef = useRef(false);
+
   useEffect(() => {
-    if (scene) {
-      // Clone the scene to avoid issues with reusing the same model
-      scene.traverse((child) => {
-        // Find the head bone for head movements
-        if (child instanceof THREE.Bone && child.name.toLowerCase().includes('head')) {
+    if (!scene) return;
+
+    if (didNormalizeRef.current) return;
+    didNormalizeRef.current = true;
+
+    // Reset any previous references
+    headBoneRef.current = null;
+    meshesWithMorphTargets.current = [];
+
+    // Auto-center & ground the model so camera fitting is stable across GLBs
+    {
+      const preBox = new THREE.Box3().setFromObject(scene);
+      const preCenter = preBox.getCenter(new THREE.Vector3());
+      const preMin = preBox.min.clone();
+
+      // Center in X/Z, ground on Y
+      scene.position.x -= preCenter.x;
+      scene.position.z -= preCenter.z;
+      scene.position.y -= preMin.y;
+    }
+
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.filter(Boolean).forEach((mat) => {
+          mat.visible = true;
+          // Some GLBs can appear black due to backface culling; this is a safe default.
+          (mat as THREE.Material).side = THREE.DoubleSide;
+          mat.needsUpdate = true;
+        });
+      }
+
+      if (child instanceof THREE.Bone) {
+        const name = child.name.toLowerCase();
+        if (!headBoneRef.current && name.includes('head')) {
           headBoneRef.current = child;
         }
-        
-        // Find meshes with morph targets (for facial animation)
-        if (child instanceof THREE.SkinnedMesh && child.morphTargetDictionary) {
-          meshesWithMorphTargets.current.push(child)
-        }
+      }
+
+      if (child instanceof THREE.SkinnedMesh && child.morphTargetDictionary) {
+        meshesWithMorphTargets.current.push(child);
+      }
+    });
+
+    // Apply friendly smile if morph targets exist (safe no-op otherwise)
+    applySmileExpression(meshesWithMorphTargets.current);
+
+    // Compute bounds for camera fitting (prefer the rendered group if available)
+    // We defer one frame so the group ref has its transform applied.
+    requestAnimationFrame(() => {
+      const avatarConfig = getAvatarConfig();
+      const scale = avatarConfig.scale ?? 1;
+      const position = avatarConfig.position ?? [0, 0, 0];
+
+      // Apply config transform BEFORE measuring bounds.
+      if (groupRef.current) {
+        groupRef.current.position.set(position[0], position[1], position[2]);
+        groupRef.current.scale.setScalar(scale);
+      }
+
+      const targetObj = groupRef.current ?? scene;
+      const box = new THREE.Box3().setFromObject(targetObj);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+
+      // Focus slightly above center (good for interview framing)
+      const focus = new THREE.Vector3(center.x, box.min.y + size.y * 0.62, center.z);
+      const maxDim = Math.max(size.x, size.y, size.z);
+
+      onBounds?.({
+        center: [center.x, center.y, center.z],
+        size: [size.x, size.y, size.z],
+        focus: [focus.x, focus.y, focus.z],
+        maxDim,
       });
-      
-      // Apply friendly smile expression
-      applySmileExpression(meshesWithMorphTargets.current);
-    }
-  }, [scene]);
+
+    });
+  }, [scene, onBounds]);
 
   // Animation loop - runs every frame
   useFrame((_, delta) => {
@@ -62,18 +135,47 @@ export function Avatar({ gestureState }: AvatarProps) {
     const head = headBoneRef.current;
     const time = timeRef.current;
     
+    // Apply lip sync visemes if enabled and provided
+    if (enableLipSync && visemes && meshesWithMorphTargets.current.length > 0) {
+      // Apply visemes to all meshes with morph targets
+      meshesWithMorphTargets.current.forEach(mesh => {
+        applyVisemesToMesh(mesh, visemes);
+      });
+    }
+    
     // Apply different animations based on gesture state
+    // If the model is not rigged (no bones), animate the whole group subtly.
+    const group = groupRef.current;
+
     switch (gestureState) {
-      case 'idle':
-        animateIdle(head, time, meshesWithMorphTargets.current);
+      case 'idle': {
+        if (head) {
+          animateIdle(head, time, meshesWithMorphTargets.current, enableLipSync);
+        } else if (group) {
+          group.rotation.y = Math.sin(time * 0.25) * 0.08;
+          group.rotation.x = Math.sin(time * 0.35) * 0.02;
+        }
         break;
-      case 'speaking':
+      }
+      case 'speaking': {
         speakingPhaseRef.current += delta;
-        animateSpeaking(head, time, meshesWithMorphTargets.current, speakingPhaseRef.current);
+        if (head) {
+          animateSpeaking(head, time, meshesWithMorphTargets.current, speakingPhaseRef.current, enableLipSync);
+        } else if (group) {
+          group.rotation.x = Math.sin(time * 1.5) * 0.05;
+          group.rotation.y = Math.sin(time * 1.1) * 0.12;
+        }
         break;
-      case 'listening':
-        animateListening(head, time, meshesWithMorphTargets.current);
+      }
+      case 'listening': {
+        if (head) {
+          animateListening(head, time, meshesWithMorphTargets.current, enableLipSync);
+        } else if (group) {
+          group.rotation.z = 0.08 + Math.sin(time * 0.4) * 0.03;
+          group.rotation.y = Math.sin(time * 0.3) * 0.06;
+        }
         break;
+      }
     }
   });
 
@@ -81,14 +183,11 @@ export function Avatar({ gestureState }: AvatarProps) {
     <group ref={groupRef}>
       {/* 
         Render the loaded 3D model
-        - position: adjusted to frame upper body/bust view like reference image
+        - position: adjusted to frame upper body/bust view
         - scale: adjusted for proper viewing
+        - Configuration is loaded from avatar.config.ts for easy customization
       */}
-      <primitive 
-        object={scene} 
-        position={[0, 0, 0]} 
-        scale={1}
-      />
+      <primitive object={scene} />
     </group>
   );
 }
@@ -100,7 +199,8 @@ export function Avatar({ gestureState }: AvatarProps) {
 function animateIdle(
   head: THREE.Bone | null, 
   time: number,
-  meshes: THREE.SkinnedMesh[]
+  meshes: THREE.SkinnedMesh[],
+  enableLipSync: boolean
 ) {
   if (head) {
     // Very subtle breathing motion - gentle and professional
@@ -110,8 +210,10 @@ function animateIdle(
     head.rotation.z = Math.sin(time * 0.3) * 0.003;
   }
   
-  // Keep slight smile during idle
-  setMouthOpenness(meshes, 0);
+  // Keep slight smile during idle (only if not using lip sync)
+  if (!enableLipSync) {
+    setMouthOpenness(meshes, 0);
+  }
 }
 
 /**
@@ -122,7 +224,8 @@ function animateSpeaking(
   head: THREE.Bone | null, 
   time: number,
   meshes: THREE.SkinnedMesh[],
-  speakingTime: number
+  speakingTime: number,
+  enableLipSync: boolean
 ) {
   if (head) {
     // Natural head movements while speaking - expressive but professional
@@ -134,13 +237,16 @@ function animateSpeaking(
     head.rotation.z = Math.sin(time * 0.8) * 0.015;
   }
   
-  // Mouth animation - natural speech pattern
-  const mouthValue = 
-    Math.abs(Math.sin(speakingTime * 6)) * 0.25 +
-    Math.abs(Math.sin(speakingTime * 10)) * 0.25 +
-    Math.abs(Math.sin(speakingTime * 4)) * 0.15;
-  
-  setMouthOpenness(meshes, Math.min(mouthValue, 0.6));
+  // Only apply procedural mouth animation if lip sync is disabled
+  if (!enableLipSync) {
+    // Mouth animation - natural speech pattern
+    const mouthValue = 
+      Math.abs(Math.sin(speakingTime * 6)) * 0.25 +
+      Math.abs(Math.sin(speakingTime * 10)) * 0.25 +
+      Math.abs(Math.sin(speakingTime * 4)) * 0.15;
+    
+    setMouthOpenness(meshes, Math.min(mouthValue, 0.6));
+  }
 }
 
 /**
@@ -150,7 +256,8 @@ function animateSpeaking(
 function animateListening(
   head: THREE.Bone | null, 
   time: number,
-  meshes: THREE.SkinnedMesh[]
+  meshes: THREE.SkinnedMesh[],
+  enableLipSync: boolean
 ) {
   if (head) {
     // Slight interested head tilt
@@ -170,8 +277,10 @@ function animateListening(
     head.rotation.y = Math.sin(time * 0.35) * 0.02;
   }
   
-  // Neutral attentive expression
-  setMouthOpenness(meshes, 0);
+  // Neutral attentive expression (only if not using lip sync)
+  if (!enableLipSync) {
+    setMouthOpenness(meshes, 0);
+  }
 }
 
 /**

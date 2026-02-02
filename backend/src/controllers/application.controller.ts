@@ -907,3 +907,301 @@ export const getRejectionReasons = async (req: AuthRequest, res: Response, next:
     next(error);
   }
 };
+
+/**
+ * Get all applications for recruiter with advanced filters
+ * Supports: status, job, AI score, search, interview status, sorting, pagination
+ */
+export const getAllApplicationsForRecruiter = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    // Get all jobs posted by this recruiter
+    const jobs = await Job.find({ recruiterId: req.user?.id });
+    const jobIds = jobs.map(job => job._id);
+
+    if (jobIds.length === 0) {
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          applications: [],
+          pagination: {
+            total: 0,
+            page: 1,
+            limit: 20,
+            totalPages: 0
+          },
+          filterOptions: {
+            jobs: [],
+            statuses: []
+          }
+        }
+      });
+    }
+
+    // Parse query parameters
+    const {
+      status,           // Comma-separated: 'pending,reviewing'
+      jobId,            // Single job ID
+      scoreMin,         // Min AI score (0-100)
+      scoreMax,         // Max AI score (0-100)
+      recommendation,   // 'select' | 'review' | 'reject'
+      confidenceLevel,  // 'low' | 'medium' | 'high'
+      hasInterview,     // 'true' | 'false'
+      interviewStatus,  // 'scheduled' | 'completed' | 'cancelled'
+      searchTerm,       // Search in name/email
+      dateFrom,         // Application date range start
+      dateTo,           // Application date range end
+      sortBy = 'appliedAt',  // Sort field
+      sortOrder = 'desc',    // 'asc' | 'desc'
+      page = '1',
+      limit = '20'
+    } = req.query;
+
+    // Build MongoDB query
+    const query: any = {
+      jobId: { $in: jobIds }
+    };
+
+    // Status filter (supports multiple)
+    if (status) {
+      const statuses = (status as string).split(',');
+      query.status = { $in: statuses };
+    }
+
+    // Job filter
+    if (jobId) {
+      query.jobId = jobId;
+    }
+
+    // AI Score range filter
+    if (scoreMin !== undefined || scoreMax !== undefined) {
+      query['aiInsights.overallScore'] = {};
+      if (scoreMin !== undefined) {
+        query['aiInsights.overallScore'].$gte = Number(scoreMin);
+      }
+      if (scoreMax !== undefined) {
+        query['aiInsights.overallScore'].$lte = Number(scoreMax);
+      }
+    }
+
+    // AI Recommendation filter
+    if (recommendation) {
+      query['aiInsights.recommendation'] = recommendation;
+    }
+
+    // Confidence Level filter
+    if (confidenceLevel) {
+      query['aiInsights.confidenceLevel'] = confidenceLevel;
+    }
+
+    // Date range filter
+    if (dateFrom || dateTo) {
+      query.appliedAt = {};
+      if (dateFrom) {
+        query.appliedAt.$gte = new Date(dateFrom as string);
+      }
+      if (dateTo) {
+        query.appliedAt.$lte = new Date(dateTo as string);
+      }
+    }
+
+    // Get applications with populated data
+    let applicationsQuery = Application.find(query)
+      .populate('applicantId', 'fullName email')
+      .populate('jobId', 'title requiredSkills experienceLevel jobCategory department');
+
+    // Search filter (name or email)
+    if (searchTerm) {
+      const applications = await applicationsQuery.lean();
+      const searchLower = (searchTerm as string).toLowerCase();
+      const filtered = applications.filter((app: any) => {
+        const name = app.applicantId?.fullName?.toLowerCase() || '';
+        const email = app.applicantId?.email?.toLowerCase() || '';
+        return name.includes(searchLower) || email.includes(searchLower);
+      });
+      
+      // Apply interview filter if needed
+      let finalResults = filtered;
+      if (hasInterview !== undefined || interviewStatus) {
+        const appIds = filtered.map((app: any) => app._id);
+        const interviews = await Interview.find({ applicationId: { $in: appIds } });
+        const interviewMap = new Map(interviews.map(i => [i.applicationId.toString(), i]));
+        
+        finalResults = filtered.filter((app: any) => {
+          const interview = interviewMap.get(app._id.toString());
+          
+          if (hasInterview === 'true') {
+            return interview !== undefined;
+          } else if (hasInterview === 'false') {
+            return interview === undefined;
+          }
+          
+          if (interviewStatus && interview) {
+            return interview.status === interviewStatus;
+          }
+          
+          return true;
+        });
+      }
+
+      // Sort
+      const sortByStr = sortBy as string;
+      finalResults.sort((a: any, b: any) => {
+        let aVal, bVal;
+        if (sortByStr === 'appliedAt') {
+          aVal = new Date(a.appliedAt).getTime();
+          bVal = new Date(b.appliedAt).getTime();
+        } else if (sortByStr === 'score') {
+          aVal = a.aiInsights?.overallScore || 0;
+          bVal = b.aiInsights?.overallScore || 0;
+        } else if (sortByStr === 'name') {
+          aVal = a.applicantId?.fullName || '';
+          bVal = b.applicantId?.fullName || '';
+        } else {
+          aVal = 0;
+          bVal = 0;
+        }
+        
+        return sortOrder === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal < bVal ? 1 : -1);
+      });
+
+      // Pagination
+      const pageNum = parseInt(page as string);
+      const limitNum = parseInt(limit as string);
+      const total = finalResults.length;
+      const totalPages = Math.ceil(total / limitNum);
+      const startIndex = (pageNum - 1) * limitNum;
+      const paginatedResults = finalResults.slice(startIndex, startIndex + limitNum);
+
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          applications: paginatedResults,
+          pagination: {
+            total,
+            page: pageNum,
+            limit: limitNum,
+            totalPages
+          },
+          filterOptions: {
+            jobs: jobs.map(j => ({ _id: j._id, title: j.title })),
+            statuses: ['pending', 'under_review', 'reviewing', 'selected', 'shortlisted', 'interview', 'rejected', 'hired']
+          }
+        }
+      });
+    }
+
+    // Interview filter (without search)
+    if (hasInterview !== undefined || interviewStatus) {
+      const allApps = await applicationsQuery.lean();
+      const appIds = allApps.map((app: any) => app._id);
+      const interviews = await Interview.find({ applicationId: { $in: appIds } });
+      const interviewMap = new Map(interviews.map(i => [i.applicationId.toString(), i]));
+      
+      const filteredApps = allApps.filter((app: any) => {
+        const interview = interviewMap.get(app._id.toString());
+        
+        if (hasInterview === 'true') {
+          return interview !== undefined;
+        } else if (hasInterview === 'false') {
+          return interview === undefined;
+        }
+        
+        if (interviewStatus && interview) {
+          return interview.status === interviewStatus;
+        }
+        
+        return true;
+      });
+
+      // Sort
+      const sortByStr = sortBy as string;
+      filteredApps.sort((a: any, b: any) => {
+        let aVal, bVal;
+        if (sortByStr === 'appliedAt') {
+          aVal = new Date(a.appliedAt).getTime();
+          bVal = new Date(b.appliedAt).getTime();
+        } else if (sortByStr === 'score') {
+          aVal = a.aiInsights?.overallScore || 0;
+          bVal = b.aiInsights?.overallScore || 0;
+        } else if (sortByStr === 'name') {
+          aVal = a.applicantId?.fullName || '';
+          bVal = b.applicantId?.fullName || '';
+        } else {
+          aVal = 0;
+          bVal = 0;
+        }
+        
+        return sortOrder === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal < bVal ? 1 : -1);
+      });
+
+      // Pagination
+      const pageNum = parseInt(page as string);
+      const limitNum = parseInt(limit as string);
+      const total = filteredApps.length;
+      const totalPages = Math.ceil(total / limitNum);
+      const startIndex = (pageNum - 1) * limitNum;
+      const paginatedResults = filteredApps.slice(startIndex, startIndex + limitNum);
+
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          applications: paginatedResults,
+          pagination: {
+            total,
+            page: pageNum,
+            limit: limitNum,
+            totalPages
+          },
+          filterOptions: {
+            jobs: jobs.map(j => ({ _id: j._id, title: j.title })),
+            statuses: ['pending', 'under_review', 'reviewing', 'selected', 'shortlisted', 'interview', 'rejected', 'hired']
+          }
+        }
+      });
+    }
+
+    // No search/interview filter - use standard query with sorting and pagination
+    const sortByStr = sortBy as string;
+    const sortOptions: any = {};
+    if (sortByStr === 'score') {
+      sortOptions['aiInsights.overallScore'] = sortOrder === 'asc' ? 1 : -1;
+    } else if (sortByStr === 'name') {
+      sortOptions['applicantId.fullName'] = sortOrder === 'asc' ? 1 : -1;
+    } else {
+      sortOptions[sortByStr] = sortOrder === 'asc' ? 1 : -1;
+    }
+
+    const pageNum = parseInt(page as string);
+    const limitNum = parseInt(limit as string);
+
+    // Get total count for pagination
+    const total = await Application.countDocuments(query);
+    const totalPages = Math.ceil(total / limitNum);
+
+    // Get paginated results
+    const applications = await applicationsQuery
+      .sort(sortOptions)
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
+      .lean();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        applications,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages
+        },
+        filterOptions: {
+          jobs: jobs.map(j => ({ _id: j._id, title: j.title })),
+          statuses: ['pending', 'under_review', 'reviewing', 'selected', 'shortlisted', 'interview', 'rejected', 'hired']
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};

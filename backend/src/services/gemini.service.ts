@@ -1,13 +1,12 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { scoringService } from './scoring.service';
-import { skillNormalizerService } from './skill-normalizer.service';
+import { Types } from 'mongoose';
+import { scoringService, ScoringResult } from './scoring.service';
 import { IApplicantProfile } from '../models/ApplicantProfile.model';
 import { IJob } from '../models/Job.model';
 import { geminiClient } from '../utils/gemini-client';
 
 // Note: genAI instance is now created dynamically via geminiClient
 
-interface CandidateData {
+export interface CandidateData {
   applicantName: string;
   applicantEmail: string;
   skills: string[];
@@ -39,10 +38,118 @@ interface CandidateData {
   githubUsername?: string;
   githubScore?: number;
   githubTopLanguages?: string[];
+  leetcodeStats?: IApplicantProfile['leetcodeStats'];
+  leetcodeScore?: number;
+  resumeText?: string;
   coverLetter?: string;
 }
+const buildSyntheticProfile = (candidate: CandidateData): IApplicantProfile => {
+  const now = new Date();
+  return {
+    userId: new Types.ObjectId(),
+    resumeUrl: '',
+    resumeFileName: '',
+    resumeText: candidate.resumeText || candidate.coverLetter || '',
+    skills: candidate.skills || [],
+    preferredRoles: [],
+    experience: candidate.experience || [],
+    experienceText: '',
+    education: candidate.education || [],
+    educationText: '',
+    yearsOfExperience: candidate.yearsOfExperience || 0,
+    bio: '',
+    location: '',
+    linkedinUrl: '',
+    portfolioUrl: '',
+    githubUsername: candidate.githubUsername || '',
+    githubAnalysis: candidate.githubScore
+      ? {
+          score: candidate.githubScore,
+          topLanguages: candidate.githubTopLanguages || [],
+          insights: [],
+          lastAnalyzed: now,
+          repoCount: 0,
+        }
+      : undefined,
+    leetcodeUsername: '',
+    leetcodeStats: candidate.leetcodeStats,
+    projects: candidate.projects || [],
+    certifications: candidate.certifications || [],
+    profileComplete: true,
+    createdAt: now,
+    updatedAt: now,
+  } as unknown as IApplicantProfile;
+};
 
-interface JobData {
+const buildSyntheticJob = (job: JobData): IJob => {
+  const now = new Date();
+  return {
+    recruiterId: new Types.ObjectId(),
+    title: job.title,
+    description: job.description,
+    department: job.department || 'General',
+    requiredSkills: job.requiredSkills || [],
+    experienceLevel: (job.experienceLevel as IJob['experienceLevel']) || 'mid',
+    jobCategory: (job.jobCategory as IJob['jobCategory']) || 'software',
+    location: job.location || 'Remote',
+    employmentType: (job.employmentType as IJob['employmentType']) || 'Full-time',
+    salaryMin: 0,
+    salaryMax: 0,
+    status: 'active',
+    applicantCount: 0,
+    openings: 1,
+    hiredCount: 0,
+    company: '',
+    companyDescription: '',
+    companyWebsite: '',
+    companyLocation: '',
+    applicationDeadline: undefined,
+    createdAt: now,
+    updatedAt: now,
+  } as unknown as IJob;
+};
+
+export function buildEvaluationFromScoring(
+  scoring: ScoringResult,
+  candidate: CandidateData,
+  job: JobData
+): AIEvaluationResult {
+  const subject = candidate.applicantName || 'This candidate';
+  const baseSummary = scoring.strengths.length
+    ? `${subject} ${scoring.strengths[0].toLowerCase()}`
+    : `${subject} has an overall readiness score of ${scoring.overallScore}/100 for ${job.title}.`;
+
+  const projectAnalysis = scoring.scoringBreakdown.projectRelevance > 0
+    ? `Projects align ${scoring.scoringBreakdown.projectRelevance}% with the ${job.title} role.`
+    : 'No closely aligned projects were detected in the parsed resume yet.';
+
+  return {
+    overallScore: scoring.overallScore,
+    aiMatchScore: scoring.overallScore,
+    hiringReadinessScore: scoring.overallScore,
+    skillMatch: scoring.scoringBreakdown.skillMatch,
+    experienceScore: scoring.scoringBreakdown.experience,
+    githubScore: scoring.scoringBreakdown.githubActivity,
+    leetcodeScore: scoring.scoringBreakdown.leetcodePerformance,
+    educationScore: scoring.scoringBreakdown.educationStrength,
+    projectAlignmentScore: scoring.scoringBreakdown.projectRelevance,
+    strengths: scoring.strengths,
+    gaps: scoring.gaps,
+    riskFactorsList: scoring.riskFactors.map((risk) => risk.message),
+    recommendation: scoring.recommendation,
+    confidence: scoring.confidenceScore,
+    aiSummary: `${baseSummary} Overall readiness score: ${scoring.overallScore}/100 with ${scoring.confidenceLevel} confidence.`,
+    projectAnalysis,
+    interviewQuestions: generateFallbackQuestions(candidate, job),
+    improvementSuggestions: scoring.gaps.slice(0, 3),
+    confidenceLevel: scoring.confidenceLevel,
+    confidenceScore: scoring.confidenceScore,
+    riskFactors: scoring.riskFactors,
+    scoringBreakdown: scoring.scoringBreakdown,
+  };
+}
+
+export interface JobData {
   title: string;
   description: string;
   department: string;
@@ -53,13 +160,14 @@ interface JobData {
   employmentType: string;
 }
 
-interface AIEvaluationResult {
+export interface AIEvaluationResult {
   overallScore: number;
   aiMatchScore: number;
   hiringReadinessScore: number;
   skillMatch: number;
   experienceScore: number;
   githubScore: number;
+  leetcodeScore?: number;
   educationScore: number;
   projectAlignmentScore: number;
   strengths: string[];
@@ -82,7 +190,9 @@ interface AIEvaluationResult {
   scoringBreakdown: {
     skillMatch: number;
     githubActivity: number;
+    leetcodePerformance: number;
     experience: number;
+    educationStrength: number;
     profileCompleteness: number;
     projectRelevance: number;
   };
@@ -95,14 +205,24 @@ export const evaluateCandidateWithGemini = async (
   jobModel?: IJob
 ): Promise<AIEvaluationResult> => {
   // STEP 1: Always run fallback scoring first (resilience layer)
-  let fallbackResult: any = null;
-  if (profile && jobModel) {
-    fallbackResult = scoringService.evaluateCandidate(jobModel, profile);
+  const scoringProfile = profile || buildSyntheticProfile(candidate);
+  let fallbackResult: ScoringResult | null = null;
+  if (jobModel && scoringProfile) {
+    fallbackResult = scoringService.evaluateCandidate(jobModel, scoringProfile);
     console.log('✅ Fallback scoring complete:', {
       score: fallbackResult.overallScore,
       confidence: fallbackResult.confidenceLevel,
       risks: fallbackResult.riskFactors.length
     });
+  }
+
+  const geminiEnabled = geminiClient.isEnabled();
+  if (!geminiEnabled) {
+    console.warn('⚠️ Gemini disabled. Using deterministic AI score.');
+    if (fallbackResult) {
+      return buildEvaluationFromScoring(fallbackResult, candidate, job);
+    }
+    return getFallbackEvaluation(candidate, job, jobModel);
   }
 
   try {
@@ -113,7 +233,7 @@ export const evaluateCandidateWithGemini = async (
     // Calculate profile completeness for confidence assessment
     const hasResume = candidate.skills.length > 0 || candidate.experience.length > 0;
     const hasCompleteProfile = candidate.experience.length > 0 && candidate.education.length > 0;
-    const hasExternalSignals = !!candidate.githubUsername && (candidate.githubScore || 0) > 0;
+    const hasExternalSignals = ((candidate.githubScore || 0) > 0) || ((candidate.leetcodeScore || 0) > 0);
     const hasProjects = candidate.projects && candidate.projects.length > 0;
     
     // Calculate skill coverage percentage
@@ -140,6 +260,10 @@ export const evaluateCandidateWithGemini = async (
     const githubRelevanceNote = isTechnicalRole 
       ? 'GitHub activity is RELEVANT for this technical role - consider it in evaluation.'
       : 'GitHub activity is NOT RELEVANT for this non-technical role - do not penalize for missing GitHub.';
+
+    const leetcodeSummary = candidate.leetcodeStats
+      ? `Solved ${candidate.leetcodeStats.totalSolved} problems (Easy: ${candidate.leetcodeStats.easySolved}, Medium: ${candidate.leetcodeStats.mediumSolved}, Hard: ${candidate.leetcodeStats.hardSolved}) with score ${candidate.leetcodeScore || candidate.leetcodeStats.score}/100.`
+      : 'Not provided';
 
     // Experience level expectations
     const levelExpectations: Record<string, string> = {
@@ -228,6 +352,7 @@ Final Confidence: Score ≥ 70 → "High" | 50–69 → "Medium" | < 50 → "Low
     : 'None'}
 - **GitHub Profile**: ${candidate.githubUsername || 'Not provided'}${candidate.githubScore ? ` (Activity Score: ${candidate.githubScore}/100)` : ''}
 - **GitHub Top Languages**: ${candidate.githubTopLanguages?.join(', ') || 'N/A'}
+- **LeetCode Stats**: ${leetcodeSummary}
 - **Cover Letter Summary**: ${candidate.coverLetter ? candidate.coverLetter.substring(0, 200) : 'Not provided'}
 
 ## EVALUATION INSTRUCTIONS
@@ -332,8 +457,9 @@ Final Confidence: Score ≥ 70 → "High" | 50–69 → "Medium" | < 50 → "Low
         hiringReadinessScore: Math.min(100, Math.max(0, evaluation.hiringReadinessScore || blendedScore)),
         skillMatch: Math.min(100, Math.max(0, evaluation.skillMatch || 50)),
         experienceScore: Math.min(100, Math.max(0, evaluation.experienceScore || 50)),
-        githubScore: candidate.githubScore || 0,
-        educationScore: Math.min(100, Math.max(0, evaluation.educationScore || 50)),
+        githubScore: fallbackResult.scoringBreakdown.githubActivity,
+        leetcodeScore: fallbackResult.scoringBreakdown.leetcodePerformance,
+        educationScore: Math.min(100, Math.max(0, evaluation.educationScore || fallbackResult.scoringBreakdown.educationStrength || 50)),
         projectAlignmentScore: Math.min(100, Math.max(0, evaluation.projectAlignmentScore || 50)),
         strengths: [...new Set([...evaluation.strengths, ...fallbackResult.strengths])].slice(0, 5),
         gaps: [...new Set([...evaluation.gaps, ...fallbackResult.gaps])].slice(0, 5),
@@ -360,6 +486,12 @@ Final Confidence: Score ≥ 70 → "High" | 50–69 → "Medium" | < 50 → "Low
       (evaluation.confidence >= 70 ? 'high' : evaluation.confidence >= 50 ? 'medium' : 'low');
     
     const aiOnlyScore = evaluation.hiringReadinessScore || evaluation.overallScore || 50;
+    const inferredProfileCompleteness = Math.min(100,
+      (candidate.resumeText ? 25 : 0) +
+      (candidate.skills.length ? 25 : 0) +
+      (candidate.experience.length ? 25 : 0) +
+      (candidate.education.length ? 25 : 0)
+    );
     
     return {
       overallScore: Math.min(100, Math.max(0, aiOnlyScore)),
@@ -368,6 +500,7 @@ Final Confidence: Score ≥ 70 → "High" | 50–69 → "Medium" | < 50 → "Low
       skillMatch: Math.min(100, Math.max(0, evaluation.skillMatch || 50)),
       experienceScore: Math.min(100, Math.max(0, evaluation.experienceScore || 50)),
       githubScore: candidate.githubScore || 0,
+      leetcodeScore: candidate.leetcodeScore || 0,
       educationScore: Math.min(100, Math.max(0, evaluation.educationScore || 50)),
       projectAlignmentScore: Math.min(100, Math.max(0, evaluation.projectAlignmentScore || 50)),
       strengths: evaluation.strengths || [],
@@ -391,8 +524,10 @@ Final Confidence: Score ≥ 70 → "High" | 50–69 → "Medium" | < 50 → "Low
       scoringBreakdown: {
         skillMatch: evaluation.skillMatch || 0,
         githubActivity: candidate.githubScore || 0,
+        leetcodePerformance: candidate.leetcodeScore || 0,
         experience: evaluation.experienceScore || 0,
-        profileCompleteness: evaluation.educationScore || 0,
+        educationStrength: evaluation.educationScore || 0,
+        profileCompleteness: inferredProfileCompleteness,
         projectRelevance: evaluation.projectAlignmentScore || 0
       }
     };
@@ -403,36 +538,11 @@ Final Confidence: Score ≥ 70 → "High" | 50–69 → "Medium" | < 50 → "Low
     // STEP 4: If Gemini fails, use fallback exclusively
     if (fallbackResult) {
       console.log('✅ Using fallback scoring exclusively (API failed)');
-      return {
-        overallScore: fallbackResult.overallScore,
-        aiMatchScore: fallbackResult.overallScore,
-        hiringReadinessScore: fallbackResult.overallScore,
-        skillMatch: fallbackResult.scoringBreakdown.skillMatch,
-        experienceScore: fallbackResult.scoringBreakdown.experience,
-        githubScore: fallbackResult.scoringBreakdown.githubActivity,
-        educationScore: fallbackResult.scoringBreakdown.profileCompleteness,
-        projectAlignmentScore: fallbackResult.scoringBreakdown.projectRelevance || 0,
-        strengths: fallbackResult.strengths,
-        gaps: fallbackResult.gaps,
-        riskFactorsList: fallbackResult.riskFactors.map((r: any) => r.message),
-        recommendation: fallbackResult.recommendation,
-        confidence: fallbackResult.confidenceScore,
-        aiSummary: `Algorithmic evaluation: Candidate scores ${fallbackResult.overallScore}% with ${fallbackResult.confidenceLevel} confidence. ${fallbackResult.riskFactors.length > 0 ? 'Risk factors identified.' : ''}`,
-        projectAnalysis: 'Project analysis unavailable - using algorithmic scoring.',
-        interviewQuestions: generateFallbackQuestions(candidate, job),
-        improvementSuggestions: fallbackResult.gaps.slice(0, 3),
-        confidenceLevel: fallbackResult.confidenceLevel,
-        confidenceScore: fallbackResult.confidenceScore,
-        riskFactors: fallbackResult.riskFactors,
-        scoringBreakdown: {
-          ...fallbackResult.scoringBreakdown,
-          projectRelevance: fallbackResult.scoringBreakdown.projectRelevance || 0
-        }
-      };
+      return buildEvaluationFromScoring(fallbackResult, candidate, job);
     }
 
     // Fallback to basic rule-based scoring
-    return getFallbackEvaluation(candidate, job);
+    return getFallbackEvaluation(candidate, job, jobModel);
   }
 };
 
@@ -461,129 +571,13 @@ const generateFallbackQuestions = (
 // Fallback evaluation when Gemini API fails
 const getFallbackEvaluation = (
   candidate: CandidateData,
-  job: JobData
+  job: JobData,
+  jobModel?: IJob
 ): AIEvaluationResult => {
-  // Calculate skill match using NLP-based normalizer for accurate matching
-  // (e.g., "Node" matches "NodeJS", "node.js", "node js")
-  const skillMatchResult = skillNormalizerService.calculateSkillMatch(
-    job.requiredSkills,
-    candidate.skills
-  );
-  const skillMatch = skillMatchResult.score;
-
-  // Calculate experience score
-  const totalYears = candidate.experience.reduce((sum, exp) => {
-    const start = new Date(exp.startDate);
-    const end = exp.current ? new Date() : (exp.endDate ? new Date(exp.endDate) : new Date());
-    return sum + (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24 * 365);
-  }, 0);
-
-  const levelRequirements: Record<string, number> = {
-    entry: 1, junior: 2, mid: 4, senior: 6, lead: 8, principal: 10
-  };
-  const requiredYears = levelRequirements[job.experienceLevel.toLowerCase()] || 3;
-  const experienceScore = Math.min(100, Math.round((totalYears / requiredYears) * 100));
-
-  // Education score
-  const educationScore = candidate.education.length > 0 ? 70 : 40;
-
-  // GitHub score
-  const githubScore = candidate.githubScore || 0;
-
-  // Overall score
-  const overallScore = Math.round(
-    skillMatch * 0.35 +
-    experienceScore * 0.30 +
-    githubScore * 0.20 +
-    educationScore * 0.15
-  );
-
-  // Determine recommendation
-  const recommendation = overallScore >= 70 ? 'select' : overallScore >= 50 ? 'review' : 'reject';
-
-  // Generate strengths and gaps
-  const strengths: string[] = [];
-  const gaps: string[] = [];
-
-  if (skillMatch >= 70) strengths.push('Strong skill alignment with role requirements');
-  if (experienceScore >= 70) strengths.push(`Solid experience (${Math.round(totalYears)} years)`);
-  if (githubScore >= 60) strengths.push('Active GitHub profile demonstrates coding activity');
-  if (candidate.education.length > 0) strengths.push('Relevant educational background');
-
-  if (skillMatch < 50) gaps.push('Missing some required technical skills');
-  if (experienceScore < 50) gaps.push('Experience level below requirements');
-  if (githubScore < 30) gaps.push('Limited or no GitHub activity visible');
-
-  // Calculate project alignment
-  const projectAlignmentScore = candidate.projects && candidate.projects.length > 0
-    ? Math.min(100, candidate.projects.length * 20 + 30)
-    : 0;
-
-  // Determine confidence level based on data quality
-  let confidencePoints = 0;
-  if (skillMatch >= 80) confidencePoints += 20;
-  else if (skillMatch >= 60) confidencePoints += 10;
-  
-  if (experienceScore >= 100) confidencePoints += 20;
-  else if (experienceScore >= 70) confidencePoints += 10;
-  
-  if (candidate.skills.length > 0 && candidate.experience.length > 0 && candidate.education.length > 0) {
-    confidencePoints += 20;
-  } else if (candidate.skills.length > 0) {
-    confidencePoints += 10;
-  }
-  
-  if (githubScore > 0) confidencePoints += 10;
-  if (candidate.projects && candidate.projects.length > 0) confidencePoints += 10;
-
-  const confidenceLevel = confidencePoints >= 70 ? 'high' : confidencePoints >= 50 ? 'medium' : 'low';
-
-  // Generate risk factors
-  const riskFactorsList: string[] = [];
-  if (skillMatch < 60) riskFactorsList.push('Skill coverage below 60% of requirements');
-  if (experienceScore < 70) riskFactorsList.push('Experience may not meet role requirements');
-  if (githubScore === 0) riskFactorsList.push('No GitHub activity to verify technical skills');
-  if (!candidate.projects || candidate.projects.length === 0) riskFactorsList.push('No projects to demonstrate practical skills');
-
-  return {
-    overallScore,
-    aiMatchScore: overallScore,
-    hiringReadinessScore: overallScore,
-    skillMatch,
-    experienceScore,
-    githubScore,
-    educationScore,
-    projectAlignmentScore,
-    strengths: strengths.length > 0 ? strengths : ['Candidate shows potential'],
-    gaps: gaps.length > 0 ? gaps : ['No significant gaps identified'],
-    riskFactorsList,
-    recommendation,
-    confidence: confidencePoints,
-    aiSummary: `Algorithmic evaluation: Candidate scores ${overallScore}% overall with ${skillMatch}% skill match. Confidence: ${confidenceLevel}.`,
-    projectAnalysis: candidate.projects && candidate.projects.length > 0 
-      ? `Candidate has ${candidate.projects.length} project(s) demonstrating practical experience.`
-      : 'No projects available for analysis.',
-    interviewQuestions: [
-      `Tell us about your experience with ${job.requiredSkills[0] || 'the required technologies'}.`,
-      'Describe a challenging project you worked on recently.',
-      'Why are you interested in this role?'
-    ],
-    improvementSuggestions: gaps.slice(0, 3),
-    confidenceLevel: confidenceLevel as 'low' | 'medium' | 'high',
-    confidenceScore: confidencePoints,
-    riskFactors: riskFactorsList.map(msg => ({
-      type: 'concern' as const,
-      message: msg,
-      category: 'skills' as const
-    })),
-    scoringBreakdown: {
-      skillMatch,
-      githubActivity: githubScore,
-      experience: experienceScore,
-      profileCompleteness: educationScore,
-      projectRelevance: projectAlignmentScore
-    }
-  };
+  const jobForScoring = jobModel || buildSyntheticJob(job);
+  const profileForScoring = buildSyntheticProfile(candidate);
+  const scoring = scoringService.evaluateCandidate(jobForScoring, profileForScoring);
+  return buildEvaluationFromScoring(scoring, candidate, job);
 };
 
 export default {

@@ -818,8 +818,8 @@ const ApplicantProfile = () => {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2 mb-4">
-            {profile.skills.map((skill) => (
-              <Badge key={skill} variant="secondary" className="px-3 py-1.5 text-sm">
+            {profile.skills.map((skill, index) => (
+              <Badge key={`skill-${index}-${skill}`} variant="secondary" className="px-3 py-1.5 text-sm">
                 {skill}
                 <button
                   onClick={() => removeSkill(skill)}
@@ -1072,8 +1072,8 @@ const ApplicantProfile = () => {
                   </div>
                   {project.techStack.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
-                      {project.techStack.map((tech) => (
-                        <Badge key={tech} variant="secondary" className="text-xs">
+                      {project.techStack.map((tech, techIndex) => (
+                        <Badge key={`project-${index}-tech-${techIndex}-${tech}`} variant="secondary" className="text-xs">
                           {tech}
                         </Badge>
                       ))}
@@ -1136,8 +1136,8 @@ const ApplicantProfile = () => {
               <div>
                 <Label>Tech Stack</Label>
                 <div className="flex flex-wrap gap-1.5 mb-2 mt-1">
-                  {newProject.techStack.map((tech) => (
-                    <Badge key={tech} variant="secondary" className="text-xs">
+                  {newProject.techStack.map((tech, techIndex) => (
+                    <Badge key={`newproject-tech-${techIndex}-${tech}`} variant="secondary" className="text-xs">
                       {tech}
                       <button
                         onClick={() =>
@@ -1495,8 +1495,8 @@ const ApplicantProfile = () => {
                 <div>
                   <p className="text-sm font-medium mb-2">Top Languages</p>
                   <div className="flex flex-wrap gap-1.5">
-                    {githubAnalysis.topLanguages.map((lang: any) => (
-                      <Badge key={lang.language} variant="secondary" className="text-xs">
+                    {githubAnalysis.topLanguages.map((lang: any, langIndex: number) => (
+                      <Badge key={`github-lang-${langIndex}-${lang.language}`} variant="secondary" className="text-xs">
                         {lang.language} ({lang.count})
                       </Badge>
                     ))}
@@ -1626,8 +1626,8 @@ const ApplicantProfile = () => {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2 mb-4">
-            {profile.preferredRoles.map((role) => (
-              <Badge key={role} variant="default" className="px-3 py-1.5 text-sm">
+            {profile.preferredRoles.map((role, index) => (
+              <Badge key={`role-${index}-${role}`} variant="default" className="px-3 py-1.5 text-sm">
                 {role}
                 <button
                   onClick={() => removeRole(role)}

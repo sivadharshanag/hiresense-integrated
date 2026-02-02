@@ -1,13 +1,13 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../middleware/auth.middleware';
-import { ApplicantProfile } from '../models/ApplicantProfile.model';
+import { ApplicantProfile, IApplicantProfile } from '../models/ApplicantProfile.model';
 import { Application } from '../models/Application.model';
-import { Job } from '../models/Job.model';
-import { User } from '../models/User.model';
+import { Job, IJob } from '../models/Job.model';
+import { User, IUser } from '../models/User.model';
 import { AppError } from '../middleware/errorHandler';
 import githubService from '../services/github.service';
-import { evaluateCandidateWithGemini } from '../services/gemini.service';
-import { skillNormalizerService } from '../services/skill-normalizer.service';
+import { CandidateData, JobData, buildEvaluationFromScoring, evaluateCandidateWithGemini } from '../services/gemini.service';
+import { scoringService } from '../services/scoring.service';
 
 // Analyze GitHub profile
 export const analyzeGitHub = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -55,45 +55,38 @@ export const analyzeGitHub = async (req: AuthRequest, res: Response, next: NextF
   }
 };
 
-// Calculate skill match score between job requirements and applicant skills
-// Uses NLP-based skill normalization for accurate matching
-// (e.g., "Node" matches "NodeJS", "node.js", "node js")
-const calculateSkillMatch = (
-  requiredSkills: string[],
-  applicantSkills: string[]
-): { score: number; matchedSkills: string[]; missingSkills: string[] } => {
-  const result = skillNormalizerService.calculateSkillMatch(requiredSkills, applicantSkills);
-  return {
-    score: result.score,
-    matchedSkills: result.matchedSkills,
-    missingSkills: result.missingSkills,
-  };
-};
+const buildCandidatePayload = (
+  user: IUser,
+  applicant?: IApplicantProfile | null,
+  coverLetter?: string
+): CandidateData => ({
+  applicantName: user?.fullName || 'Unknown',
+  applicantEmail: user?.email || '',
+  skills: applicant?.skills ?? [],
+  experience: applicant?.experience ?? [],
+  education: applicant?.education ?? [],
+  projects: applicant?.projects ?? [],
+  certifications: applicant?.certifications ?? [],
+  yearsOfExperience: applicant?.yearsOfExperience ?? 0,
+  githubUsername: applicant?.githubUsername,
+  githubScore: applicant?.githubAnalysis?.score,
+  githubTopLanguages: applicant?.githubAnalysis?.topLanguages,
+  leetcodeStats: applicant?.leetcodeStats,
+  leetcodeScore: applicant?.leetcodeStats?.score,
+  resumeText: applicant?.resumeText,
+  coverLetter,
+});
 
-// Calculate experience score based on years of experience
-const calculateExperienceScore = (
-  experienceYears: number,
-  jobLevel: string
-): number => {
-  const levelRequirements: Record<string, { min: number; ideal: number }> = {
-    entry: { min: 0, ideal: 2 },
-    mid: { min: 2, ideal: 5 },
-    senior: { min: 5, ideal: 8 },
-    lead: { min: 8, ideal: 12 },
-  };
-
-  const requirement = levelRequirements[jobLevel.toLowerCase()] || { min: 0, ideal: 5 };
-
-  if (experienceYears < requirement.min) {
-    return Math.round((experienceYears / requirement.min) * 50);
-  } else if (experienceYears >= requirement.ideal) {
-    return 100;
-  } else {
-    const range = requirement.ideal - requirement.min;
-    const progress = experienceYears - requirement.min;
-    return Math.round(50 + (progress / range) * 50);
-  }
-};
+const buildJobPayload = (job: IJob): JobData => ({
+  title: job.title,
+  description: job.description,
+  department: job.department || 'General',
+  requiredSkills: job.requiredSkills || [],
+  experienceLevel: job.experienceLevel || 'mid',
+  jobCategory: job.jobCategory || 'software',
+  location: job.location || 'Remote',
+  employmentType: job.employmentType || 'Full-time',
+});
 
 // Evaluate application with AI insights (using Gemini)
 export const evaluateApplication = async (
@@ -113,38 +106,17 @@ export const evaluateApplication = async (
       throw new AppError('Application not found', 404);
     }
 
-    const job = application.jobId as any;
-    const user = application.applicantId as any;
+    const job = application.jobId as unknown as IJob;
+    const user = application.applicantId as unknown as IUser;
     const applicant = await ApplicantProfile.findOne({
       userId: user._id,
     });
 
     // Prepare candidate data for Gemini (including projects)
-    const candidateData = {
-      applicantName: user.fullName || 'Unknown',
-      applicantEmail: user.email || '',
-      skills: applicant?.skills || [],
-      experience: applicant?.experience || [],
-      education: applicant?.education || [],
-      projects: applicant?.projects || [],
-      certifications: applicant?.certifications || [],
-      yearsOfExperience: applicant?.yearsOfExperience || 0,
-      githubUsername: applicant?.githubUsername,
-      githubScore: applicant?.githubAnalysis?.score,
-      githubTopLanguages: applicant?.githubAnalysis?.topLanguages,
-      coverLetter: application.coverLetter,
-    };
+    const candidateData = buildCandidatePayload(user, applicant, application.coverLetter);
 
     // Prepare job data for Gemini
-    const jobData = {
-      title: job.title,
-      description: job.description,
-      department: job.department || 'General',
-      requiredSkills: job.requiredSkills || [],
-      experienceLevel: job.experienceLevel || 'mid',
-      location: job.location || 'Remote',
-      employmentType: job.employmentType || 'Full-time',
-    };
+    const jobData = buildJobPayload(job);
 
     // Call Gemini AI for evaluation (with fallback scoring)
     console.log('🤖 Calling Gemini AI for candidate evaluation...');
@@ -221,7 +193,8 @@ export const evaluateJobApplications = async (
     }
 
     // Get all applications for this job
-    const applications = await Application.find({ jobId });
+    const applications = await Application.find({ jobId }).populate('applicantId');
+    const jobData = buildJobPayload(job);
 
     let evaluated = 0;
     let failed = 0;
@@ -229,63 +202,28 @@ export const evaluateJobApplications = async (
     // Evaluate each application
     for (const application of applications) {
       try {
-        const applicant = await ApplicantProfile.findOne({
-          userId: application.applicantId,
+        const applicantUser = application.applicantId as unknown as IUser;
+        if (!applicantUser) {
+          failed++;
+          continue;
+        }
+
+        const applicantProfile = await ApplicantProfile.findOne({
+          userId: applicantUser._id,
         });
 
-        if (!applicant) continue;
+        if (!applicantProfile) {
+          failed++;
+          continue;
+        }
 
-        // Calculate scores (same logic as above)
-        const skillMatch = calculateSkillMatch(
-          job.requiredSkills || [],
-          applicant.skills || []
-        );
-
-        const totalExperience = (applicant.experience || []).reduce((sum, exp) => {
-          const start = new Date(exp.startDate);
-          const end = exp.current ? new Date() : (exp.endDate ? new Date(exp.endDate) : new Date());
-          const years = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24 * 365);
-          return sum + years;
-        }, 0);
-
-        const experienceScore = calculateExperienceScore(
-          totalExperience,
-          job.experienceLevel
-        );
-
-        const githubScore = applicant.githubAnalysis?.score || 0;
-
-        const overallScore = Math.round(
-          skillMatch.score * 0.4 +
-          experienceScore * 0.35 +
-          githubScore * 0.25
-        );
-
-        const strengths: string[] = [];
-        const gaps: string[] = [];
-
-        if (skillMatch.score >= 80) strengths.push('Excellent skill match');
-        if (experienceScore >= 80) strengths.push('Strong experience level');
-        if (githubScore >= 70) strengths.push('Highly active GitHub profile');
-        if (skillMatch.missingSkills.length > 0)
-          gaps.push(`Missing: ${skillMatch.missingSkills.join(', ')}`);
-
-        let recommendation: 'select' | 'review' | 'reject';
-        if (overallScore >= 70) recommendation = 'select';
-        else if (overallScore >= 50) recommendation = 'review';
-        else recommendation = 'reject';
+        const candidatePayload = buildCandidatePayload(applicantUser, applicantProfile, application.coverLetter);
+        const scoringResult = scoringService.evaluateCandidate(job, applicantProfile);
+        const evaluation = buildEvaluationFromScoring(scoringResult, candidatePayload, jobData);
 
         application.aiInsights = {
-          skillMatch: skillMatch.score,
-          experienceScore,
-          githubScore,
-          educationScore: 0,
-          overallScore,
-          strengths,
-          gaps,
-          recommendation,
-          confidence: overallScore,
-        };
+          ...evaluation,
+        } as any;
 
         await application.save();
         evaluated++;

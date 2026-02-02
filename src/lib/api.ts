@@ -172,6 +172,49 @@ export const applicationsApi = {
     return apiFetch<any>('/api/applications');
   },
 
+  getAllForRecruiter: async (filters?: {
+    status?: string[];
+    jobId?: string;
+    scoreMin?: number;
+    scoreMax?: number;
+    recommendation?: string;
+    confidenceLevel?: string;
+    hasInterview?: boolean;
+    interviewStatus?: string;
+    searchTerm?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    page?: number;
+    limit?: number;
+  }): Promise<ApiResponse<any>> => {
+    const params = new URLSearchParams();
+    
+    if (filters) {
+      if (filters.status && filters.status.length > 0) {
+        params.append('status', filters.status.join(','));
+      }
+      if (filters.jobId) params.append('jobId', filters.jobId);
+      if (filters.scoreMin !== undefined) params.append('scoreMin', filters.scoreMin.toString());
+      if (filters.scoreMax !== undefined) params.append('scoreMax', filters.scoreMax.toString());
+      if (filters.recommendation) params.append('recommendation', filters.recommendation);
+      if (filters.confidenceLevel) params.append('confidenceLevel', filters.confidenceLevel);
+      if (filters.hasInterview !== undefined) params.append('hasInterview', filters.hasInterview.toString());
+      if (filters.interviewStatus) params.append('interviewStatus', filters.interviewStatus);
+      if (filters.searchTerm) params.append('searchTerm', filters.searchTerm);
+      if (filters.dateFrom) params.append('dateFrom', filters.dateFrom);
+      if (filters.dateTo) params.append('dateTo', filters.dateTo);
+      if (filters.sortBy) params.append('sortBy', filters.sortBy);
+      if (filters.sortOrder) params.append('sortOrder', filters.sortOrder);
+      if (filters.page) params.append('page', filters.page.toString());
+      if (filters.limit) params.append('limit', filters.limit.toString());
+    }
+    
+    const query = params.toString();
+    return apiFetch<any>(`/api/applications/recruiter/all${query ? `?${query}` : ''}`);
+  },
+
   getMyApplications: async (): Promise<ApiResponse<any>> => {
     return apiFetch<any>('/api/applications/my-applications');
   },

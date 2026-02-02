@@ -16,6 +16,7 @@ import applicationRoutes from './routes/application.routes';
 import aiRoutes from './routes/ai.routes';
 import interviewRoutes from './routes/interview.routes';
 import talentPoolRoutes from './routes/talent-pool.routes';
+import virtualInterviewRoutes from './routes/virtual-interview.routes';
 
 // Load environment variables
 dotenv.config();
@@ -88,6 +89,7 @@ app.use('/api/applications', applicationRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/interviews', interviewRoutes);
 app.use('/api/talent-pool', talentPoolRoutes);
+app.use('/api/virtual-interview', virtualInterviewRoutes);
 
 // 404 Handler
 app.use((req: Request, res: Response) => {
@@ -101,11 +103,13 @@ app.use((req: Request, res: Response) => {
 app.use(errorHandler);
 
 // Database connection and server start
+let server: any;
+
 const startServer = async () => {
   try {
     await connectDB();
     
-    const server = app.listen(PORT, () => {
+    server = app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV}`);
       console.log(`🌐 API URL: http://localhost:${PORT}`);
@@ -120,11 +124,20 @@ const startServer = async () => {
       console.error('Uncaught Exception:', error);
     });
 
-    // Graceful shutdown
+    // Graceful shutdown - CRITICAL for Windows/nodemon
+    process.on('SIGINT', () => {
+      console.log('\n🛑 SIGINT received: Graceful shutdown...');
+      server?.close(() => {
+        console.log('✅ Server closed successfully');
+        process.exit(0);
+      });
+    });
+
     process.on('SIGTERM', () => {
-      console.log('SIGTERM signal received: closing HTTP server');
-      server.close(() => {
-        console.log('HTTP server closed');
+      console.log('\n🛑 SIGTERM received: Graceful shutdown...');
+      server?.close(() => {
+        console.log('✅ Server closed successfully');
+        process.exit(0);
       });
     });
   } catch (error) {

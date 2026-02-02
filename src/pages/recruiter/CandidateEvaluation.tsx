@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,8 @@ import { applicationsApi, aiApi } from '@/lib/api';
 import { StatusUpdateDialog } from '@/components/recruiter/StatusUpdateDialog';
 import { InterviewFocusPanel } from '@/components/recruiter/InterviewFocusPanel';
 import { SkillGapHeatmap } from '@/components/recruiter/SkillGapHeatmap';
+import { CandidateSearchBar } from '@/components/recruiter/CandidateSearchBar';
+import { CandidateFilters } from '@/components/recruiter/CandidateFilters';
 import { interviewTopics } from '@/data/interviewQuestions';
 import {
   RadarChart,
@@ -121,6 +123,27 @@ const CandidateEvaluation = () => {
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
   
+  // Filter and Search State
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filters, setFilters] = useState({
+    status: [] as string[],
+    jobId: 'all',
+    scoreRange: [0, 100] as [number, number],
+    recommendation: 'all',
+    confidenceLevel: 'all',
+    hasInterview: 'all',
+    interviewStatus: 'all',
+  });
+  const [sortBy, setSortBy] = useState('appliedAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: 20,
+    total: 0,
+    totalPages: 0,
+  });
+  const [availableJobs, setAvailableJobs] = useState<Array<{ _id: string; title: string }>>([]);
+  
   // Status update dialog state for Phase 3
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<string>('');
@@ -134,9 +157,28 @@ const CandidateEvaluation = () => {
   const [skillGapAnalysis, setSkillGapAnalysis] = useState<any>(null);
   const [generatingSkillGap, setGeneratingSkillGap] = useState(false);
 
+  // Debounced search
+  const searchTimeoutRef = useRef<NodeJS.Timeout>();
+
   useEffect(() => {
-    loadApplications();
-  }, [searchParams]);
+    // Clear timeout on unmount
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // Debounce search
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    
+    searchTimeoutRef.current = setTimeout(() => {
+      loadApplications();
+    }, 300);
+  }, [searchTerm, filters, sortBy, sortOrder, pagination.page, searchParams]);
 
   const loadApplications = async () => {
     try {
@@ -144,6 +186,7 @@ const CandidateEvaluation = () => {
       const applicationId = searchParams.get('id');
       const jobId = searchParams.get('jobId');
 
+      // If specific application ID is provided, load that single application
       if (applicationId) {
         const response = await applicationsApi.getById(applicationId);
         if (response.data?.application) {
@@ -151,12 +194,84 @@ const CandidateEvaluation = () => {
           setApplications([app]);
           setSelectedApplication(app);
         }
-      } else if (jobId) {
+      } 
+      // If jobId is provided in URL, use it as filter
+      else if (jobId) {
         const response = await applicationsApi.getByJob(jobId);
         if (response.data?.applications) {
           setApplications(response.data.applications);
           if (response.data.applications.length > 0) {
             setSelectedApplication(response.data.applications[0]);
+          }
+        }
+      } 
+      // Otherwise, load all applications with filters
+      else {
+        const filterParams: any = {
+          searchTerm: searchTerm || undefined,
+          sortBy,
+          sortOrder,
+          page: pagination.page,
+          limit: pagination.limit,
+        };
+
+        // Add status filter if any statuses are selected
+        if (filters.status.length > 0) {
+          filterParams.status = filters.status;
+        }
+
+        // Add job filter if not "all"
+        if (filters.jobId !== 'all') {
+          filterParams.jobId = filters.jobId;
+        }
+
+        // Add score range if not default
+        if (filters.scoreRange[0] > 0 || filters.scoreRange[1] < 100) {
+          filterParams.scoreMin = filters.scoreRange[0];
+          filterParams.scoreMax = filters.scoreRange[1];
+        }
+
+        // Add recommendation filter if not "all"
+        if (filters.recommendation !== 'all') {
+          filterParams.recommendation = filters.recommendation;
+        }
+
+        // Add confidence level filter if not "all"
+        if (filters.confidenceLevel !== 'all') {
+          filterParams.confidenceLevel = filters.confidenceLevel;
+        }
+
+        // Add interview status filter
+        if (filters.interviewStatus !== 'all') {
+          if (filters.interviewStatus === 'none') {
+            filterParams.hasInterview = false;
+          } else {
+            filterParams.interviewStatus = filters.interviewStatus;
+            filterParams.hasInterview = true;
+          }
+        }
+
+        const response = await applicationsApi.getAllForRecruiter(filterParams);
+        
+        if (response.data) {
+          setApplications(response.data.applications || []);
+          setPagination({
+            page: response.data.pagination?.page || 1,
+            limit: response.data.pagination?.limit || 20,
+            total: response.data.pagination?.total || 0,
+            totalPages: response.data.pagination?.totalPages || 0,
+          });
+          
+          // Set available jobs for filter dropdown
+          if (response.data.filterOptions?.jobs) {
+            setAvailableJobs(response.data.filterOptions.jobs);
+          }
+
+          // Auto-select first application if exists
+          if (response.data.applications && response.data.applications.length > 0) {
+            setSelectedApplication(response.data.applications[0]);
+          } else {
+            setSelectedApplication(null);
           }
         }
       }
@@ -259,6 +374,31 @@ const CandidateEvaluation = () => {
     } finally {
       setGeneratingSkillGap(false);
     }
+  };
+
+  // Filter and pagination handlers
+  const handleClearFilters = () => {
+    setFilters({
+      status: [],
+      jobId: 'all',
+      scoreRange: [0, 100],
+      recommendation: 'all',
+      confidenceLevel: 'all',
+      hasInterview: 'all',
+      interviewStatus: 'all',
+    });
+    setSearchTerm('');
+    setPagination(prev => ({ ...prev, page: 1 }));
+  };
+
+  const handlePageChange = (newPage: number) => {
+    setPagination(prev => ({ ...prev, page: newPage }));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSortChange = (value: string) => {
+    setSortBy(value);
+    setPagination(prev => ({ ...prev, page: 1 }));
   };
 
   const getScoreColor = (score: number) => {
@@ -1262,14 +1402,70 @@ const CandidateEvaluation = () => {
     );
   }
 
-  if (applications.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-96 text-center">
-        <Users className="w-16 h-16 text-muted-foreground mb-4 opacity-50" />
-        <h2 className="text-xl font-semibold text-foreground mb-2">No Applications Found</h2>
-        <p className="text-muted-foreground">No applications available for evaluation.</p>
-      </div>
-    );
+  const hasActiveFilters = 
+    filters.status.length > 0 ||
+    filters.jobId !== 'all' ||
+    filters.scoreRange[0] > 0 ||
+    filters.scoreRange[1] < 100 ||
+    filters.recommendation !== 'all' ||
+    filters.confidenceLevel !== 'all' ||
+    filters.interviewStatus !== 'all' ||
+    searchTerm !== '';
+
+  // Show empty state only if there are no applications AND no filters are active
+  if (applications.length === 0 && !isLoading) {
+    if (hasActiveFilters) {
+      // No results for current filters
+      return (
+        <div className="space-y-6 animate-fade-in">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+              <Sparkles className="w-6 h-6 text-accent" />
+              AI-Powered Candidate Evaluation
+            </h1>
+            <p className="text-muted-foreground">Review candidates with AI-generated insights and hiring recommendations</p>
+          </div>
+          
+          {/* Search Bar */}
+          <div className="flex gap-4 items-center">
+            <CandidateSearchBar 
+              value={searchTerm}
+              onChange={setSearchTerm}
+            />
+            <Button variant="outline" onClick={() => handleSortChange(sortBy === 'appliedAt' ? 'score' : 'appliedAt')}>
+              Sort: {sortBy === 'appliedAt' ? 'Most Recent' : 'Best Match'}
+            </Button>
+          </div>
+
+          {/* Filters */}
+          <CandidateFilters 
+            filters={filters}
+            onChange={setFilters}
+            jobs={availableJobs}
+            onClearAll={handleClearFilters}
+            resultsCount={pagination.total}
+          />
+
+          <div className="flex flex-col items-center justify-center h-96 text-center">
+            <Users className="w-16 h-16 text-muted-foreground mb-4 opacity-50" />
+            <h2 className="text-xl font-semibold text-foreground mb-2">No Candidates Match Your Filters</h2>
+            <p className="text-muted-foreground mb-4">Try adjusting your search criteria or filters.</p>
+            <Button onClick={handleClearFilters} variant="outline">
+              Clear All Filters
+            </Button>
+          </div>
+        </div>
+      );
+    } else {
+      // Truly no applications at all
+      return (
+        <div className="flex flex-col items-center justify-center h-96 text-center">
+          <Users className="w-16 h-16 text-muted-foreground mb-4 opacity-50" />
+          <h2 className="text-xl font-semibold text-foreground mb-2">No Applications Yet</h2>
+          <p className="text-muted-foreground">Applications will appear here once candidates apply to your jobs.</p>
+        </div>
+      );
+    }
   }
 
   return (
@@ -1282,8 +1478,79 @@ const CandidateEvaluation = () => {
           </h1>
           <p className="text-muted-foreground">Review candidates with AI-generated insights and hiring recommendations</p>
         </div>
-
       </div>
+      
+      {/* Search Bar and Sort */}
+      <div className="flex gap-4 items-center">
+        <CandidateSearchBar 
+          value={searchTerm}
+          onChange={setSearchTerm}
+        />
+        <div className="flex gap-2">
+          <Button 
+            variant={sortBy === 'appliedAt' ? 'default' : 'outline'} 
+            onClick={() => handleSortChange('appliedAt')}
+            size="sm"
+          >
+            Most Recent
+          </Button>
+          <Button 
+            variant={sortBy === 'score' ? 'default' : 'outline'} 
+            onClick={() => handleSortChange('score')}
+            size="sm"
+          >
+            Best Match
+          </Button>
+          <Button 
+            variant={sortBy === 'name' ? 'default' : 'outline'} 
+            onClick={() => handleSortChange('name')}
+            size="sm"
+          >
+            Name (A-Z)
+          </Button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <CandidateFilters 
+        filters={filters}
+        onChange={setFilters}
+        jobs={availableJobs}
+        onClearAll={handleClearFilters}
+        resultsCount={pagination.total}
+      />
+
+      {/* Pagination Info */}
+      {pagination.total > 0 && (
+        <div className="flex justify-between items-center text-sm text-muted-foreground">
+          <span>
+            Showing {((pagination.page - 1) * pagination.limit) + 1} - {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} candidates
+          </span>
+          {pagination.totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(pagination.page - 1)}
+                disabled={pagination.page === 1}
+              >
+                Previous
+              </Button>
+              <span>
+                Page {pagination.page} of {pagination.totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(pagination.page + 1)}
+                disabled={pagination.page >= pagination.totalPages}
+              >
+                Next
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Horizontal Candidate Selector */}
       {applications.length > 1 && (
@@ -2329,6 +2596,56 @@ const CandidateEvaluation = () => {
             </Tabs>
           </div>
         )}
+
+      {/* Bottom Pagination */}
+      {pagination.totalPages > 1 && (
+        <Card>
+          <CardContent className="py-4">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">
+                Page {pagination.page} of {pagination.totalPages} ({pagination.total} total candidates)
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handlePageChange(1)}
+                  disabled={pagination.page === 1}
+                >
+                  First
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handlePageChange(pagination.page - 1)}
+                  disabled={pagination.page === 1}
+                >
+                  Previous
+                </Button>
+                <span className="px-3 py-1 bg-secondary rounded text-sm font-medium">
+                  {pagination.page}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handlePageChange(pagination.page + 1)}
+                  disabled={pagination.page >= pagination.totalPages}
+                >
+                  Next
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handlePageChange(pagination.totalPages)}
+                  disabled={pagination.page >= pagination.totalPages}
+                >
+                  Last
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Phase 3: Status Update Dialog with AI-generated justification */}
       <StatusUpdateDialog

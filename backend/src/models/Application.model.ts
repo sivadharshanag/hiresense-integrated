@@ -9,14 +9,18 @@ interface IRiskFactor {
 interface IScoringBreakdown {
   skillMatch: number;
   githubActivity: number;
+  leetcodePerformance: number;
   experience: number;
+  educationStrength: number;
   profileCompleteness: number;
+  projectRelevance: number;
 }
 
 export interface IAIInsights {
   skillMatch: number;
   experienceScore: number;
   githubScore: number;
+  leetcodeScore?: number;
   educationScore: number;
   overallScore: number;
   strengths: string[];
@@ -111,6 +115,7 @@ const ApplicationSchema = new Schema<IApplication>({
     skillMatch: { type: Number, default: 0 },
     experienceScore: { type: Number, default: 0 },
     githubScore: { type: Number, default: 0 },
+    leetcodeScore: { type: Number, default: 0 },
     educationScore: { type: Number, default: 0 },
     overallScore: { type: Number, default: 0 },
     // GCC Evaluation Scores
@@ -155,7 +160,9 @@ const ApplicationSchema = new Schema<IApplication>({
     scoringBreakdown: {
       skillMatch: { type: Number, default: 0 },
       githubActivity: { type: Number, default: 0 },
+      leetcodePerformance: { type: Number, default: 0 },
       experience: { type: Number, default: 0 },
+      educationStrength: { type: Number, default: 0 },
       profileCompleteness: { type: Number, default: 0 },
       projectRelevance: { type: Number, default: 0 }
     }

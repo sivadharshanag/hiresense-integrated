@@ -2,21 +2,23 @@ import { IApplicantProfile } from '../models/ApplicantProfile.model';
 import { IJob } from '../models/Job.model';
 import { skillNormalizerService } from './skill-normalizer.service';
 
-interface ScoringBreakdown {
+export interface ScoringBreakdown {
   skillMatch: number;
   githubActivity: number;
+  leetcodePerformance: number;
   experience: number;
+  educationStrength: number;
   profileCompleteness: number;
   projectRelevance: number;
 }
 
-interface RiskFactor {
+export interface RiskFactor {
   type: 'warning' | 'concern' | 'blocker';
   message: string;
   category: 'skills' | 'experience' | 'activity' | 'profile';
 }
 
-interface ScoringResult {
+export interface ScoringResult {
   overallScore: number;
   confidenceLevel: 'low' | 'medium' | 'high';
   confidenceScore: number;
@@ -29,24 +31,24 @@ interface ScoringResult {
 
 // Job category-based signal weights
 // GitHub weight is 0 for non-technical roles
-const categoryWeights: Record<string, { skills: number; github: number; experience: number; projects: number; profile: number }> = {
-  'software': { skills: 35, github: 20, experience: 20, projects: 15, profile: 10 },
-  'data-science': { skills: 35, github: 15, experience: 20, projects: 20, profile: 10 },
-  'qa-automation': { skills: 40, github: 10, experience: 25, projects: 15, profile: 10 },
-  'non-technical': { skills: 45, github: 0, experience: 35, projects: 0, profile: 20 },
-  'business': { skills: 40, github: 0, experience: 40, projects: 0, profile: 20 }
+type CategoryWeights = {
+  skills: number;
+  github: number;
+  leetcode: number;
+  experience: number;
+  projects: number;
+  education: number;
+  profile: number;
 };
 
-// Experience level expectations
-const experienceExpectations: Record<string, { minYears: number; minProjects: number; minGithubScore: number; minSkillMatch: number }> = {
-  'fresher': { minYears: 0, minProjects: 1, minGithubScore: 20, minSkillMatch: 60 },
-  'junior': { minYears: 1, minProjects: 2, minGithubScore: 40, minSkillMatch: 65 },
-  'mid': { minYears: 3, minProjects: 2, minGithubScore: 60, minSkillMatch: 75 },
-  'senior': { minYears: 6, minProjects: 3, minGithubScore: 80, minSkillMatch: 80 },
-  // Legacy support
-  'entry': { minYears: 0, minProjects: 1, minGithubScore: 20, minSkillMatch: 60 },
-  'lead': { minYears: 6, minProjects: 3, minGithubScore: 80, minSkillMatch: 80 }
+const categoryWeights: Record<string, CategoryWeights> = {
+  'software': { skills: 30, github: 15, leetcode: 10, experience: 20, projects: 15, education: 5, profile: 5 },
+  'data-science': { skills: 30, github: 10, leetcode: 15, experience: 20, projects: 15, education: 5, profile: 5 },
+  'qa-automation': { skills: 35, github: 10, leetcode: 10, experience: 20, projects: 15, education: 5, profile: 5 },
+  'non-technical': { skills: 40, github: 0, leetcode: 0, experience: 30, projects: 0, education: 15, profile: 15 },
+  'business': { skills: 35, github: 0, leetcode: 0, experience: 35, projects: 0, education: 15, profile: 15 }
 };
+
 
 /**
  * Fallback Scoring Service
@@ -90,6 +92,46 @@ class ScoringService {
     if (score >= 40) return 70;
     if (score >= 20) return 50;
     return 30;
+  }
+
+  /**
+   * Calculate algorithmic problem-solving performance from LeetCode stats
+   * Weight: Contextual based on job category
+   */
+  calculateLeetCodePerformance(leetcodeStats?: IApplicantProfile['leetcodeStats']): number {
+    if (!leetcodeStats || typeof leetcodeStats.score !== 'number') return 0;
+
+    const score = leetcodeStats.score;
+    if (score >= 85) return 100;
+    if (score >= 70) return 85;
+    if (score >= 50) return 70;
+    if (score >= 30) return 55;
+    return 35;
+  }
+
+  /**
+   * Evaluate the strength of formal education + certifications
+   */
+  calculateEducationStrength(education: IApplicantProfile['education'], certifications: IApplicantProfile['certifications']): number {
+    if (!education?.length && !certifications?.length) {
+      return 20;
+    }
+
+    let score = 40;
+    const advancedDegree = education?.some(edu => /master|msc|mca|phd|doctor/i.test(edu.degree));
+    const bachelors = education?.some(edu => /bachelor|bsc|btech|be/i.test(edu.degree));
+
+    if (advancedDegree) score += 30;
+    else if (bachelors) score += 20;
+
+    const extraEducationEntries = Math.max(0, (education?.length || 0) - 1);
+    score += Math.min(extraEducationEntries * 10, 20);
+
+    if (certifications?.length) {
+      score += Math.min(certifications.length * 5, 20);
+    }
+
+    return Math.min(100, score);
   }
 
   /**
@@ -243,6 +285,7 @@ class ScoringService {
     job: IJob
   ): RiskFactor[] {
     const risks: RiskFactor[] = [];
+    const weights = categoryWeights[job.jobCategory] || categoryWeights['software'];
 
     // Skill-related risks
     if (scoringBreakdown.skillMatch < 50) {
@@ -274,6 +317,23 @@ class ScoringService {
       });
     }
 
+    // DSA / LeetCode signals (only for technical roles)
+    if (weights.leetcode > 0) {
+      if (!profile.leetcodeStats) {
+        risks.push({
+          type: 'concern',
+          message: 'No LeetCode stats available to verify problem-solving depth',
+          category: 'activity'
+        });
+      } else if (scoringBreakdown.leetcodePerformance < 50) {
+        risks.push({
+          type: 'warning',
+          message: 'Algorithmic problem-solving score below expectations for this role',
+          category: 'activity'
+        });
+      }
+    }
+
     // Experience-related risks
     if (scoringBreakdown.experience < 40) {
       risks.push({
@@ -294,6 +354,14 @@ class ScoringService {
       risks.push({
         type: 'warning',
         message: 'Incomplete profile - missing key information',
+        category: 'profile'
+      });
+    }
+
+    if (weights.education > 0 && scoringBreakdown.educationStrength < 50) {
+      risks.push({
+        type: 'concern',
+        message: 'Educational background details are insufficient for this role',
         category: 'profile'
       });
     }
@@ -368,6 +436,12 @@ class ScoringService {
       strengths.push('Moderate GitHub presence');
     }
 
+    if (scoringBreakdown.leetcodePerformance >= 80) {
+      strengths.push('Excellent problem-solving track record on LeetCode');
+    } else if (scoringBreakdown.leetcodePerformance >= 60) {
+      strengths.push('Solid DSA fundamentals demonstrated via coding challenges');
+    }
+
     if (scoringBreakdown.experience >= 90) {
       strengths.push('Perfect experience match for role level');
     } else if (scoringBreakdown.experience >= 75) {
@@ -376,6 +450,12 @@ class ScoringService {
 
     if (scoringBreakdown.profileCompleteness >= 80) {
       strengths.push('Comprehensive professional profile');
+    }
+
+    if (scoringBreakdown.educationStrength >= 80) {
+      strengths.push('Strong formal education and credentials');
+    } else if (scoringBreakdown.educationStrength >= 60) {
+      strengths.push('Well-documented academic foundation');
     }
 
     if (profile.githubAnalysis?.topLanguages?.length) {
@@ -401,7 +481,6 @@ class ScoringService {
     // Get job category (default to software if not set)
     const jobCategory = (job as any).jobCategory || 'software';
     const weights = categoryWeights[jobCategory] || categoryWeights['software'];
-    const expectations = experienceExpectations[job.experienceLevel] || experienceExpectations['mid'];
 
     // Calculate individual scores
     const skillMatch = this.calculateSkillMatch(job.requiredSkills, profile.skills);
@@ -410,6 +489,10 @@ class ScoringService {
     const githubActivity = weights.github > 0 
       ? this.calculateGitHubScore(profile.githubAnalysis)
       : 0;
+
+    const leetcodePerformance = weights.leetcode > 0
+      ? this.calculateLeetCodePerformance(profile.leetcodeStats)
+      : 0;
     
     const experience = this.calculateExperienceScore(
       job.experienceLevel,
@@ -417,6 +500,8 @@ class ScoringService {
       profile.experience
     );
     const profileCompleteness = this.calculateProfileCompleteness(profile);
+
+    const educationStrength = this.calculateEducationStrength(profile.education, profile.certifications);
     
     // Only calculate project relevance if relevant for this job category
     const projectRelevance = weights.projects > 0
@@ -429,7 +514,9 @@ class ScoringService {
     const scoringBreakdown: ScoringBreakdown = {
       skillMatch,
       githubActivity,
+      leetcodePerformance,
       experience,
+      educationStrength,
       profileCompleteness,
       projectRelevance
     };
@@ -439,8 +526,10 @@ class ScoringService {
     const overallScore = Math.round(
       skillMatch * (weights.skills / 100) +
       githubActivity * (weights.github / 100) +
+      leetcodePerformance * (weights.leetcode / 100) +
       experience * (weights.experience / 100) +
       projectRelevance * (weights.projects / 100) +
+      educationStrength * (weights.education / 100) +
       profileCompleteness * (weights.profile / 100)
     );
 
@@ -461,6 +550,18 @@ class ScoringService {
     const missingSkills = job.requiredSkills.filter(skill => !matchedSkills.includes(skill));
     if (missingSkills.length > 0) {
       gaps.push(...missingSkills.slice(0, 5).map(skill => `${skill} experience`));
+    }
+
+    if (weights.leetcode > 0) {
+      if (!profile.leetcodeStats) {
+        gaps.push('Add verifiable coding challenge stats (LeetCode, HackerRank, etc.)');
+      } else if (scoringBreakdown.leetcodePerformance < 60) {
+        gaps.push('Strengthen data structures & algorithms practice to improve LeetCode score');
+      }
+    }
+
+    if (weights.education > 0 && scoringBreakdown.educationStrength < 60) {
+      gaps.push('Document formal education and certifications in more detail');
     }
 
     // Determine recommendation

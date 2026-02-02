@@ -238,9 +238,9 @@ const RecruiterDashboard = () => {
             <CardDescription>AI-powered hiring readiness assessments</CardDescription>
           </div>
           <Link to="/recruiter/candidates">
-            <Button variant="ghost" size="sm">
-              View All
-              <ArrowRight className="w-4 h-4 ml-1" />
+            <Button variant="ghost" size="sm" className="gap-2">
+              <Users className="w-4 h-4" />
+              Search & Filter Candidates
             </Button>
           </Link>
         </CardHeader>
