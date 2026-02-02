@@ -15,6 +15,7 @@ export interface AvatarConfig {
   // Optional: Model-specific visual adjustments
   scale?: number;
   position?: [number, number, number];
+  yawOffset?: number; // radians
   
   // Optional: Camera settings optimized for this model
   // NOTE: The scene now auto-fits camera to the loaded model bounds.
@@ -40,6 +41,7 @@ export const AVATAR_MODELS: Record<string, AvatarConfig> = {
     // Keep these neutral; the scene auto-centers and auto-fits camera.
     scale: 1,
     position: [0, 0, 0],
+    yawOffset: -Math.PI / 2,
     features: {
       hasMorphTargets: true,
       hasFullBody: true,

@@ -6,7 +6,7 @@
  */
 
 import { useRef, useEffect } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { GestureState } from '@/types/avatar';
@@ -33,6 +33,8 @@ export function Avatar({ gestureState, onBounds, visemes, enableLipSync = false 
   
   // Reference to the model group for animations/transforms
   const groupRef = useRef<THREE.Group>(null);
+  const didOrientRef = useRef(false);
+  const { camera } = useThree();
   
   // References for specific bones/meshes we'll animate
   const headBoneRef = useRef<THREE.Bone | null>(null);
@@ -102,11 +104,22 @@ export function Avatar({ gestureState, onBounds, visemes, enableLipSync = false 
       const avatarConfig = getAvatarConfig();
       const scale = avatarConfig.scale ?? 1;
       const position = avatarConfig.position ?? [0, 0, 0];
+      const yawOffset = avatarConfig.yawOffset ?? 0;
 
       // Apply config transform BEFORE measuring bounds.
       if (groupRef.current) {
         groupRef.current.position.set(position[0], position[1], position[2]);
         groupRef.current.scale.setScalar(scale);
+
+        if (!didOrientRef.current) {
+          groupRef.current.lookAt(camera.position.x, groupRef.current.position.y, camera.position.z);
+          didOrientRef.current = true;
+        }
+      }
+
+      // Apply yaw offset to the model itself (more reliable than group lookAt)
+      if (yawOffset !== 0) {
+        scene.rotation.y = yawOffset;
       }
 
       const targetObj = groupRef.current ?? scene;

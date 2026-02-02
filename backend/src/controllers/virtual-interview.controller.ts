@@ -6,8 +6,9 @@
 
 import { Request, Response } from 'express';
 import { virtualInterviewService } from '../services/virtual-interview.service';
-import { groqService } from '../services/groq.service';
 import mongoose from 'mongoose';
+import { localSttService } from '../services/local-stt.service';
+import { localTtsService } from '../services/local-tts.service';
 
 /**
  * Start a new interview session
@@ -35,7 +36,7 @@ export const startInterview = async (req: Request, res: Response) => {
     // Generate TTS for greeting
     let greetingAudio = null;
     try {
-      const ttsResult = await groqService.textToSpeech(greeting);
+      const ttsResult = await localTtsService.textToSpeech(greeting);
       greetingAudio = {
         audio: ttsResult.audioBuffer.toString('base64'),
         contentType: ttsResult.contentType,
@@ -85,10 +86,9 @@ export const transcribeAudio = async (req: Request, res: Response) => {
     const filename = req.file.originalname || 'audio.webm';
     const mimeType = req.file.mimetype;
 
-    const result = await groqService.transcribe(audioBuffer, {
+    const result = await localSttService.transcribe(audioBuffer, {
       filename,
       mimeType,
-      includeTimestamps: true,
     });
 
     res.status(200).json({
@@ -209,7 +209,7 @@ export const submitAnswer = async (req: Request, res: Response) => {
     // Generate TTS for feedback
     let feedbackAudio = null;
     try {
-      const ttsResult = await groqService.textToSpeech(feedbackText);
+      const ttsResult = await localTtsService.textToSpeech(feedbackText);
       feedbackAudio = {
         audio: ttsResult.audioBuffer.toString('base64'),
         contentType: ttsResult.contentType,
@@ -274,7 +274,7 @@ export const generateSpeech = async (req: Request, res: Response) => {
 
     console.log('TTS Request - Text length:', text.length, 'Voice:', voice || 'default', 'Format: wav');
 
-    const result = await groqService.textToSpeech(text, { voice, responseFormat: 'wav' });
+    const result = await localTtsService.textToSpeech(text);
 
     console.log('TTS Success - Audio buffer size:', result.audioBuffer.length, 'Content-Type:', result.contentType);
 

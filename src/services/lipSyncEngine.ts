@@ -87,6 +87,10 @@ function wordToViseme(word: string): string {
   return VISEME_NAMES.AA;
 }
 
+export function getVisemeForWord(word: string): string {
+  return wordToViseme(word);
+}
+
 /**
  * Generate viseme animation frames from word timestamps
  */

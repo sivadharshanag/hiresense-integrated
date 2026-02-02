@@ -31,9 +31,10 @@ import {
   XCircle
 } from 'lucide-react';
 import { Scene } from '@/components/applicant/Scene';
-import { useGroqSTT } from '@/hooks/useGroqSTT';
-import { useGroqTTS } from '@/hooks/useGroqTTS';
+import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
+import { useTextToSpeech } from '@/hooks/useTextToSpeech';
 import { SyncManager } from '@/services/syncManager';
+import { getVisemeForWord, VISEME_NAMES } from '@/services/lipSyncEngine';
 import { virtualInterviewApi, type InterviewQuestion, type InterviewSession, type FinalEvaluation } from '@/services/interviewService';
 import { applicantApi } from '@/lib/api';
 import type { GestureState } from '@/types/avatar';
@@ -67,23 +68,32 @@ const VirtualInterviewInterface: React.FC = () => {
 
   const { toast } = useToast();
   const syncManagerRef = useRef<SyncManager>(new SyncManager());
+  const visemeTimeoutRef = useRef<number | null>(null);
+  const lipSyncIntervalRef = useRef<number | null>(null);
 
   // Custom hooks
   const {
-    isRecording,
-    isTranscribing,
+    isListening: isRecording,
     transcript,
-    startRecording,
-    stopRecording,
-    clearTranscript
-  } = useGroqSTT();
+    startListening: startRecording,
+    stopListening: stopRecording,
+    isSupported: isSttSupported,
+  } = useSpeechRecognition();
+
+  const isTranscribing = false;
 
   const {
     isSpeaking,
-    isLoading: isTTSLoading,
     speak,
-    stop: stopSpeaking
-  } = useGroqTTS();
+    stop: stopSpeaking,
+    isSupported: isTtsSupported,
+  } = useTextToSpeech();
+
+  const isSpeakingRef = useRef(false);
+
+  useEffect(() => {
+    isSpeakingRef.current = isSpeaking;
+  }, [isSpeaking]);
 
   // Update gesture state
   useEffect(() => {
@@ -222,13 +232,79 @@ const VirtualInterviewInterface: React.FC = () => {
     try {
       // For now, just use the basic TTS without lip sync
       // TODO: Integrate word-level timestamps from Groq STT for better lip sync
-      await speak(text, {
-        onSpeechStart: () => {
-          setGestureState('speaking');
-        },
-        onSpeechEnd: () => {
-          setGestureState('idle');
-        },
+      if (!isTtsSupported) {
+        throw new Error('Text-to-speech is not supported in this browser');
+      }
+
+      const handleBoundary = (word: string) => {
+        const viseme = getVisemeForWord(word);
+        setCurrentVisemes({ [viseme]: 1.0 });
+
+        if (visemeTimeoutRef.current) {
+          window.clearTimeout(visemeTimeoutRef.current);
+        }
+
+        visemeTimeoutRef.current = window.setTimeout(() => {
+          setCurrentVisemes({ [VISEME_NAMES.SILENCE]: 1.0 });
+        }, 120);
+      };
+
+      const handleStart = () => {
+        // Fallback animation if boundary events are not supported
+        if (!lipSyncIntervalRef.current) {
+          let toggle = false;
+          lipSyncIntervalRef.current = window.setInterval(() => {
+            toggle = !toggle;
+            setCurrentVisemes({
+              [toggle ? VISEME_NAMES.AA : VISEME_NAMES.E]: 1.0,
+            });
+          }, 120);
+        }
+      };
+
+      const handleEnd = () => {
+        if (visemeTimeoutRef.current) {
+          window.clearTimeout(visemeTimeoutRef.current);
+          visemeTimeoutRef.current = null;
+        }
+        if (lipSyncIntervalRef.current) {
+          window.clearInterval(lipSyncIntervalRef.current);
+          lipSyncIntervalRef.current = null;
+        }
+        setCurrentVisemes({ [VISEME_NAMES.SILENCE]: 1.0 });
+      };
+
+      speak(text, {
+        onStart: handleStart,
+        onBoundary: handleBoundary,
+        onEnd: handleEnd,
+      });
+
+      // Wait until speech finishes to preserve flow
+      await new Promise<void>((resolve) => {
+        const startedAt = Date.now();
+        let started = false;
+
+        const check = () => {
+          const speaking = isSpeakingRef.current;
+
+          if (!started) {
+            if (speaking) {
+              started = true;
+            } else if (Date.now() - startedAt > 800) {
+              // If speech doesn't start quickly, continue without blocking
+              return resolve();
+            }
+          }
+
+          if (started && !speaking) {
+            return resolve();
+          }
+
+          setTimeout(check, 100);
+        };
+
+        check();
       });
     } catch (error) {
       console.error('TTS error:', error);
@@ -243,22 +319,23 @@ const VirtualInterviewInterface: React.FC = () => {
 
   // Start recording answer
   const handleStartRecording = () => {
+    if (!isSttSupported) {
+      toast({
+        title: 'Speech Recognition Unsupported',
+        description: 'Your browser does not support speech recognition. Use Chrome or Edge.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setState('listening');
-    clearTranscript();
     setUserAnswer('');
     startRecording();
   };
 
   // Stop recording and wait for transcription
-  const handleStopRecording = async () => {
-    setState('processing');
-
-    const result = await stopRecording();
-    if (result?.text) {
-      setUserAnswer(result.text);
-    }
-
-    // Return to waiting state so user can review/submit
+  const handleStopRecording = () => {
+    stopRecording();
     setState('waiting_for_answer');
   };
 
@@ -295,12 +372,13 @@ const VirtualInterviewInterface: React.FC = () => {
         confidence: response.evaluation.confidenceScore,
       };
 
-      const feedbackText = `Great! Here's your evaluation:\n\nTechnical: ${scores.technical}/10\nCommunication: ${scores.communication}/10\nConfidence: ${scores.confidence}/10\n\n${response.evaluation.feedback}`;
+      const feedbackText = response.feedbackText ||
+        `Great! Here's your evaluation:\n\nTechnical: ${scores.technical}/10\nCommunication: ${scores.communication}/10\nConfidence: ${scores.confidence}/10\n\n${response.evaluation.feedback}`;
       
       setConversationHistory(prev => [...prev, { speaker: 'ai', message: feedbackText }]);
       
       setState('feedback');
-      await speakWithLipSync(response.evaluation.feedback);
+      await speakWithLipSync(feedbackText);
 
       // Check if interview is complete
       if (response.completed && response.finalEvaluation) {
@@ -309,12 +387,18 @@ const VirtualInterviewInterface: React.FC = () => {
         await handleInterviewComplete(response.finalEvaluation);
       } else if (response.nextQuestion) {
         // Move to next question
-        setCurrentQuestion(response.nextQuestion);
-        setCurrentQuestionNumber(currentQuestionNumber + 1);
-        setUserAnswer('');
-        clearTranscript();
+        const nextQuestion = {
+          number: response.nextQuestion.number ?? response.nextQuestion.questionNumber,
+          text: response.nextQuestion.text ?? response.nextQuestion.questionText,
+          category: response.nextQuestion.category,
+          difficulty: response.nextQuestion.difficulty,
+        } as InterviewQuestion;
 
-        const questionText = response.nextQuestion.text;
+        setCurrentQuestion(nextQuestion);
+        setCurrentQuestionNumber(nextQuestion.number);
+        setUserAnswer('');
+
+        const questionText = nextQuestion.text;
         setConversationHistory(prev => [...prev, { speaker: 'ai', message: questionText }]);
 
         setState('asking_question');
@@ -323,8 +407,8 @@ const VirtualInterviewInterface: React.FC = () => {
         setState('waiting_for_answer');
 
         toast({
-          title: `Question ${currentQuestionNumber + 1} of 10`,
-          description: response.nextQuestion.category,
+          title: `Question ${nextQuestion.number} of 10`,
+          description: nextQuestion.category,
         });
       }
     } catch (error: any) {
@@ -364,7 +448,7 @@ const VirtualInterviewInterface: React.FC = () => {
     setUserAnswer('');
     setConversationHistory([]);
     setError(null);
-    clearTranscript();
+    setUserAnswer('');
     stopSpeaking();
     syncManagerRef.current.stop();
   };
