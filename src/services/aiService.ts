@@ -171,7 +171,7 @@ class AIService {
     });
 
     if (!this.apiKey) {
-      throw new Error('Gemini API key is not configured. Please add GEMINI_API_KEY to your .env file.');
+      throw new Error('Gemini API key  not configured. Please add GEMINI_API_KEY to your .env file.');
     }
 
     const response = await this.callGemini(userMessage);
