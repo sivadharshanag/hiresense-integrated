@@ -17,6 +17,7 @@ import aiRoutes from './routes/ai.routes';
 import interviewRoutes from './routes/interview.routes';
 import talentPoolRoutes from './routes/talent-pool.routes';
 import virtualInterviewRoutes from './routes/virtual-interview.routes';
+import notificationRoutes from './routes/notification.routes';
 
 // Load environment variables
 dotenv.config();
@@ -29,15 +30,35 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(helmet()); // Security headers
+const normalizeOrigin = (value: string) => value.replace(/\/$/, '');
+
+const allowedOrigins = new Set([
+  normalizeOrigin(process.env.FRONTEND_URL || 'http://localhost:8080'),
+  'http://localhost:8080',
+  'http://localhost:8081',
+  'http://localhost:8082',
+  'http://127.0.0.1:8080',
+  'http://127.0.0.1:8081',
+  'http://127.0.0.1:8082',
+  'https://hiresense-gcc.vercel.app',
+]);
+
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:8080',
-    'http://localhost:8081', // Vite alternative port
-    'http://localhost:8082',
-    'https://hiresense-gcc.vercel.app', // Production frontend
-  ],
-  credentials: true
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    const normalized = normalizeOrigin(origin);
+    if (allowedOrigins.has(normalized)) return callback(null, true);
+    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(normalized)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 204,
 }));
+app.options('*', cors());
 app.use(morgan('dev')); // Logging
 app.use(express.json({ limit: '10mb' })); // Parse JSON bodies with 10MB limit for resumes
 app.use(express.urlencoded({ extended: true, limit: '10mb' })); // Parse URL-encoded bodies
@@ -90,6 +111,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/interviews', interviewRoutes);
 app.use('/api/talent-pool', talentPoolRoutes);
 app.use('/api/virtual-interview', virtualInterviewRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // 404 Handler
 app.use((req: Request, res: Response) => {

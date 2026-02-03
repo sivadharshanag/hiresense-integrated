@@ -17,6 +17,7 @@ export interface IJob extends Document {
   openings: number;
   hiredCount: number;
   applicationDeadline?: Date;
+  matchThreshold: number; // Minimum skill match percentage for candidate notifications (default: 50)
   // Company details (auto-filled from recruiter profile)
   company: string;
   companyDescription?: string;
@@ -99,6 +100,12 @@ const JobSchema = new Schema<IJob>({
   applicationDeadline: {
     type: Date,
     required: false
+  },
+  matchThreshold: {
+    type: Number,
+    default: 50,
+    min: 0,
+    max: 100
   },
   // Company details (auto-filled from recruiter profile)
   company: {

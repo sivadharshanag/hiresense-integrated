@@ -535,8 +535,27 @@ class EmailService {
     matchedSkills: string[];
     matchPercentage: number;
     jobId: string;
+    salaryMin?: number;
+    salaryMax?: number;
+    applicationDeadline?: string;
+    companyDescription?: string;
   }): Promise<boolean> {
-    const { applicantName, applicantEmail, jobTitle, companyName, location, employmentType, experienceLevel, matchedSkills, matchPercentage, jobId } = data;
+    const { applicantName, applicantEmail, jobTitle, companyName, location, employmentType, experienceLevel, matchedSkills, matchPercentage, jobId, salaryMin, salaryMax, applicationDeadline, companyDescription } = data;
+
+    // Format salary range if available
+    const salaryInfo = salaryMin && salaryMax 
+      ? `💰 $${salaryMin.toLocaleString()} - $${salaryMax.toLocaleString()}`
+      : '';
+    
+    // Format application deadline if available
+    const deadlineInfo = applicationDeadline 
+      ? `<p style="color: #ef4444; font-weight: bold;">⏰ Application Deadline: ${applicationDeadline}</p>`
+      : '';
+
+    // Company description snippet (first 150 chars)
+    const companyInfo = companyDescription 
+      ? `<p style="color: #6b7280; font-size: 14px; margin-top: 10px;">${companyDescription.substring(0, 150)}${companyDescription.length > 150 ? '...' : ''}</p>`
+      : '';
 
     const subject = `🎯 New Job Match: ${jobTitle} - ${matchPercentage}% Skill Match!`;
     const html = `
@@ -551,7 +570,8 @@ class EmailService {
           .match-badge { display: inline-block; background: #10b981; color: white; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 18px; }
           .job-card { background: white; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px; margin: 20px 0; }
           .skill-tag { display: inline-block; background: #e0e7ff; color: #4f46e5; padding: 4px 12px; border-radius: 15px; font-size: 14px; margin: 4px 2px; }
-          .cta-button { display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 15px; }
+          .job-details { background: #f3f4f6; padding: 15px; border-radius: 8px; margin: 15px 0; }
+          .cta-button { display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 15px; font-size: 16px; }
           .footer { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }
         </style>
       </head>
@@ -568,23 +588,35 @@ class EmailService {
             
             <div class="job-card">
               <h2 style="margin-top: 0; color: #1f2937;">${jobTitle}</h2>
-              <p style="color: #6b7280; margin-bottom: 15px;">
-                📍 ${location} • 💼 ${employmentType} • 📊 ${experienceLevel.charAt(0).toUpperCase() + experienceLevel.slice(1)} Level
+              <p style="color: #374151; font-size: 16px; font-weight: 500; margin-bottom: 10px;">
+                ${companyName}
               </p>
+              ${companyInfo}
               
-              <p><strong>Your Matching Skills:</strong></p>
+              <div class="job-details">
+                <p style="margin: 8px 0;">📍 <strong>Location:</strong> ${location}</p>
+                <p style="margin: 8px 0;">💼 <strong>Type:</strong> ${employmentType}</p>
+                <p style="margin: 8px 0;">📊 <strong>Experience:</strong> ${experienceLevel.charAt(0).toUpperCase() + experienceLevel.slice(1)} Level</p>
+                ${salaryInfo ? `<p style="margin: 8px 0;">${salaryInfo}</p>` : ''}
+              </div>
+              
+              ${deadlineInfo}
+              
+              <p style="margin-top: 20px;"><strong>✅ Your Matching Skills:</strong></p>
               <div>
                 ${matchedSkills.map(skill => `<span class="skill-tag">✓ ${skill}</span>`).join(' ')}
               </div>
             </div>
             
-            <p>Don't miss this opportunity! Apply now before the position fills up.</p>
+            <p style="font-size: 16px; color: #1f2937;">Don't miss this opportunity! Click below to view the full job description and apply directly.</p>
             
             <center>
-              <a href="${process.env.FRONTEND_URL || 'http://localhost:8080'}/applicant/jobs" class="cta-button">
-                View Job & Apply →
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:8080'}/applicant/jobs/${jobId}" class="cta-button">
+                Apply Now →
               </a>
             </center>
+            
+            <p style="margin-top: 25px; font-size: 14px; color: #6b7280;">This direct link will take you to the job application page where you can review all details and submit your application.</p>
             
             <p style="margin-top: 25px;">Best of luck with your application!</p>
             
@@ -766,6 +798,107 @@ class EmailService {
     `;
     
     return this.sendEmail(companyEmail, subject, html);
+  }
+
+  // Template: Job Posted Confirmation (for Recruiter)
+  async sendJobPostedConfirmation(data: {
+    recruiterName: string;
+    recruiterEmail: string;
+    jobTitle: string;
+    companyName: string;
+    matchThreshold: number;
+    notifiedCount: number;
+    jobId: string;
+    openings: number;
+  }): Promise<boolean> {
+    const { recruiterName, recruiterEmail, jobTitle, companyName, matchThreshold, notifiedCount, jobId, openings } = data;
+
+    const subject = `✅ Job Posted Successfully - ${jobTitle}`;
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.8; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+          .info-card { background: white; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px; margin: 20px 0; }
+          .stat-box { background: #f0fdf4; border-left: 4px solid #10b981; padding: 15px; margin: 15px 0; border-radius: 5px; }
+          .button { display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin: 10px 5px; font-weight: bold; font-size: 14px; }
+          .button-secondary { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
+          .footer { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }
+          .next-steps { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 15px; margin: 20px 0; border-radius: 5px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>✅ Job Posted Successfully!</h1>
+            <p>Your job is now live and visible to candidates</p>
+          </div>
+          <div class="content">
+            <p>Hi ${recruiterName},</p>
+            
+            <p>Great news! Your job posting has been successfully published on HireSense.</p>
+            
+            <div class="info-card">
+              <h2 style="margin-top: 0; color: #1f2937;">${jobTitle}</h2>
+              <p style="color: #6b7280; margin-bottom: 15px;">
+                <strong>${companyName}</strong>
+              </p>
+              <p style="color: #374151;">
+                📅 <strong>Posted:</strong> ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}<br>
+                🎯 <strong>Match Threshold:</strong> ${matchThreshold}%<br>
+                👥 <strong>Openings:</strong> ${openings}
+              </p>
+            </div>
+            
+            <div class="stat-box">
+              <h3 style="margin-top: 0; color: #059669;">📧 Notification Summary</h3>
+              <p style="font-size: 18px; margin: 10px 0;">
+                <strong>${notifiedCount}</strong> ${notifiedCount === 1 ? 'candidate has' : 'candidates have'} been automatically notified about this job posting.
+              </p>
+              <p style="font-size: 14px; color: #6b7280; margin-top: 10px;">
+                These candidates have ${matchThreshold}% or higher skill match with your job requirements.
+              </p>
+            </div>
+            
+            <div class="next-steps">
+              <h3 style="margin-top: 0; color: #1e40af;">🚀 Next Steps</h3>
+              <ul style="margin: 10px 0; padding-left: 20px; line-height: 2;">
+                <li>Applications will appear in your dashboard as candidates apply</li>
+                <li>You'll receive email notifications for new applications</li>
+                <li>Use AI-powered evaluation to screen candidates efficiently</li>
+                <li>Schedule interviews directly through the platform</li>
+              </ul>
+            </div>
+            
+            <center style="margin-top: 30px;">
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:8080'}/recruiter/jobs/applications?jobId=${jobId}" class="button">
+                📊 View Applications
+              </a>
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:8080'}/recruiter/jobs" class="button button-secondary">
+                📝 Manage Jobs
+              </a>
+            </center>
+            
+            <p style="margin-top: 30px; font-size: 14px; color: #6b7280;">
+              <strong>Pro Tip:</strong> Enable AI insights to get instant candidate evaluations and recommendations!
+            </p>
+            
+            <p style="margin-top: 25px;">Best regards,<br>The HireSense AI Team</p>
+          </div>
+          <div class="footer">
+            <p>HireSense AI - Intelligent Hiring Platform</p>
+            <p>This email was sent to ${recruiterEmail}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail(recruiterEmail, subject, html);
   }
 
   // Helper: Format date for emails

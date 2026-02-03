@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -55,6 +56,7 @@ interface Job {
 }
 
 const JobListings = () => {
+  const { jobId } = useParams<{ jobId?: string }>();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [appliedJobIds, setAppliedJobIds] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
@@ -69,6 +71,16 @@ const JobListings = () => {
     fetchJobs();
     fetchAppliedJobs();
   }, []);
+
+  // Auto-open job details if jobId is in URL
+  useEffect(() => {
+    if (jobId && jobs.length > 0) {
+      const job = jobs.find(j => j._id === jobId);
+      if (job) {
+        setViewDetailsJob(job);
+      }
+    }
+  }, [jobId, jobs]);
 
   const fetchJobs = async () => {
     try {

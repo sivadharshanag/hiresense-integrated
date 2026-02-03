@@ -7,6 +7,7 @@ import { RecruiterProfile } from '../models/RecruiterProfile.model';
 import { User } from '../models/User.model';
 import { emailService } from '../services/email.service';
 import { skillNormalizerService } from '../services/skill-normalizer.service';
+import { createJobMatchNotification } from './notification.controller';
 
 // Helper function to calculate skill match percentage using NLP-based normalizer
 // (e.g., "Node" matches "NodeJS", "node.js", "node js")
@@ -18,9 +19,9 @@ const calculateSkillMatch = (jobSkills: string[], applicantSkills: string[]): { 
 };
 
 // Notify matching applicants about new job (non-blocking)
-const notifyMatchingApplicants = async (job: any) => {
+const notifyMatchingApplicants = async (job: any): Promise<number> => {
   try {
-    if (!job.requiredSkills || job.requiredSkills.length === 0) return;
+    if (!job.requiredSkills || job.requiredSkills.length === 0) return 0;
 
     // Find all applicant profiles with skills
     const profiles = await ApplicantProfile.find({
@@ -28,6 +29,7 @@ const notifyMatchingApplicants = async (job: any) => {
     }).populate('userId', 'fullName email');
 
     let notifiedCount = 0;
+    const matchThreshold = job.matchThreshold || 50; // Use job's threshold or default to 50
 
     for (const profile of profiles) {
       const user = profile.userId as any;
@@ -35,31 +37,57 @@ const notifyMatchingApplicants = async (job: any) => {
 
       const { percentage, matchedSkills } = calculateSkillMatch(job.requiredSkills, profile.skills);
 
-      // Only notify if 70%+ skill match
-      if (percentage >= 70) {
+      // Notify if skill match meets or exceeds the job's threshold
+      if (percentage >= matchThreshold) {
         try {
-          await emailService.sendJobMatchNotification({
+          // Create in-app notification (primary)
+          await createJobMatchNotification(
+            user._id.toString(),
+            job._id.toString(),
+            job.title,
+            job.company || 'HireSense',
+            percentage,
+            matchedSkills
+          );
+
+          // Format application deadline if exists
+          const deadlineStr = job.applicationDeadline 
+            ? new Date(job.applicationDeadline).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+            : undefined;
+
+          // Also try to send email (optional, non-blocking)
+          emailService.sendJobMatchNotification({
             applicantName: user.fullName || 'Applicant',
             applicantEmail: user.email,
             jobTitle: job.title,
-            companyName: 'HireSense',
+            companyName: job.company || 'HireSense',
             location: job.location || 'Remote',
             employmentType: job.employmentType || 'Full-time',
             experienceLevel: job.experienceLevel,
             matchedSkills,
             matchPercentage: percentage,
             jobId: job._id.toString(),
+            salaryMin: job.salaryMin,
+            salaryMax: job.salaryMax,
+            applicationDeadline: deadlineStr,
+            companyDescription: job.companyDescription,
+          }).catch(err => {
+            // Email is optional - just log the error
+            console.error(`📧 Email failed for ${user.email} (notification created):`, err.message);
           });
+          
           notifiedCount++;
         } catch (err) {
-          console.error(`Failed to send job notification to ${user.email}:`, err);
+          console.error(`Failed to notify ${user.email}:`, err);
         }
       }
     }
 
-    console.log(`📧 Job notification: ${notifiedCount} applicants notified for "${job.title}"`);
+    console.log(`🔔 Job notification: ${notifiedCount} applicants notified for "${job.title}" (${matchThreshold}% threshold)`);
+    return notifiedCount;
   } catch (error) {
     console.error('Error notifying applicants:', error);
+    return 0;
   }
 };
 
@@ -77,12 +105,20 @@ export const createJob = async (req: AuthRequest, res: Response, next: NextFunct
       salaryMax,
       openings,
       status,
+      matchThreshold, // NEW: Configurable match threshold
+      applicationDeadline,
       // Optional company overrides
       company,
       companyDescription,
       companyWebsite,
       companyLocation
     } = req.body;
+
+    // Validate matchThreshold if provided
+    const threshold = matchThreshold !== undefined ? parseInt(matchThreshold) : 50;
+    if (threshold < 0 || threshold > 100) {
+      throw new AppError('Match threshold must be between 0 and 100', 400);
+    }
 
     // Fetch recruiter profile to auto-fill company details
     const recruiterProfile = await RecruiterProfile.findOne({ userId: req.user?.id });
@@ -106,6 +142,8 @@ export const createJob = async (req: AuthRequest, res: Response, next: NextFunct
       salaryMax,
       openings: openings || 1,
       status: status || 'active',
+      matchThreshold: threshold, // NEW: Save the threshold
+      applicationDeadline,
       // Company details
       company: companyName,
       companyDescription: companyDesc,
@@ -113,9 +151,32 @@ export const createJob = async (req: AuthRequest, res: Response, next: NextFunct
       companyLocation: companyLoc
     });
 
-    // Notify matching applicants in background (only for active jobs)
+    // Notify matching applicants and recruiter in background (only for active jobs)
     if (job.status === 'active') {
-      notifyMatchingApplicants(job).catch(err => console.error('Background notification error:', err));
+      // Notify candidates in background
+      notifyMatchingApplicants(job)
+        .then(async (notifiedCount) => {
+          // Send confirmation email to recruiter after candidates are notified
+          try {
+            const recruiter = await User.findById(req.user?.id);
+            if (recruiter) {
+              await emailService.sendJobPostedConfirmation({
+                recruiterName: recruiter.fullName || 'Recruiter',
+                recruiterEmail: recruiter.email,
+                jobTitle: job.title,
+                companyName: job.company || companyName || 'Your Company',
+                matchThreshold: threshold,
+                notifiedCount: notifiedCount,
+                jobId: job._id.toString(),
+                openings: job.openings
+              });
+              console.log(`✅ Recruiter confirmation sent to ${recruiter.email}`);
+            }
+          } catch (err) {
+            console.error('Failed to send recruiter confirmation:', err);
+          }
+        })
+        .catch(err => console.error('Background notification error:', err));
     }
 
     res.status(201).json({

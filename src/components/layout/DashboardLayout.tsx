@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
+import { NotificationBell } from '@/components/ui/notification-bell';
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -220,6 +221,9 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                 </>
               )}
             </div>
+
+            {/* Notification Bell - Only for applicants */}
+            {!isRecruiter && <NotificationBell />}
             
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

@@ -24,7 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Briefcase, Users, Eye, Edit, Trash2, MapPin, Clock, Loader2, AlertTriangle, UserX } from 'lucide-react';
+import { Plus, Briefcase, Users, Eye, Edit, Trash2, MapPin, Clock, Loader2, AlertTriangle, UserX, Target } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -32,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
 import { jobsApi, applicationsApi } from '@/lib/api';
 
 interface Job {
@@ -75,6 +76,7 @@ const JobManagement = () => {
     salaryMax: '',
     openings: '1',
     applicationDeadline: '',
+    matchThreshold: 50,
   });
   const { toast } = useToast();
 
@@ -125,6 +127,7 @@ const JobManagement = () => {
         salaryMax: newJob.salaryMax ? parseInt(newJob.salaryMax) : undefined,
         openings: newJob.openings ? parseInt(newJob.openings) : 1,
         applicationDeadline: newJob.applicationDeadline ? new Date(newJob.applicationDeadline).toISOString() : undefined,
+        matchThreshold: newJob.matchThreshold,
       };
 
       await jobsApi.create(jobData);
@@ -147,6 +150,7 @@ const JobManagement = () => {
         salaryMax: '',
         openings: '1',
         applicationDeadline: '',
+        matchThreshold: 50,
       });
       setIsDialogOpen(false);
       fetchJobs(); // Refresh the list
@@ -238,6 +242,29 @@ const JobManagement = () => {
                   onChange={(e) => setNewJob({ ...newJob, requiredSkills: e.target.value })}
                 />
               </div>
+              
+              {/* Match Threshold Slider */}
+              <div className="space-y-3 bg-gradient-to-br from-primary/5 to-secondary/5 p-4 rounded-lg border border-primary/20">
+                <div className="flex items-center gap-2">
+                  <Target className="w-5 h-5 text-primary" />
+                  <Label htmlFor="matchThreshold" className="text-base font-semibold">
+                    Candidate Match Threshold: {newJob.matchThreshold}%
+                  </Label>
+                </div>
+                <Slider
+                  id="matchThreshold"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={[newJob.matchThreshold]}
+                  onValueChange={(value) => setNewJob({ ...newJob, matchThreshold: value[0] })}
+                  className="w-full"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Candidates with <strong>{newJob.matchThreshold}%</strong> or higher skill match will be automatically notified via email about this job posting.
+                </p>
+              </div>
+              
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="experience">Experience Level *</Label>

@@ -67,6 +67,7 @@ const App = () => (
             <Route path="/applicant" element={<ProtectedRoute allowedRole="applicant"><DashboardLayout><ApplicantDashboard /></DashboardLayout></ProtectedRoute>} />
             <Route path="/applicant/profile" element={<ProtectedRoute allowedRole="applicant"><DashboardLayout><ApplicantProfile /></DashboardLayout></ProtectedRoute>} />
             <Route path="/applicant/jobs" element={<ProtectedRoute allowedRole="applicant"><DashboardLayout><JobListings /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/applicant/jobs/:jobId" element={<ProtectedRoute allowedRole="applicant"><DashboardLayout><JobListings /></DashboardLayout></ProtectedRoute>} />
             <Route path="/applicant/my-applications" element={<ProtectedRoute allowedRole="applicant"><DashboardLayout><MyApplications /></DashboardLayout></ProtectedRoute>} />
             <Route path="/applicant/feedback" element={<ProtectedRoute allowedRole="applicant"><DashboardLayout><YourApplications /></DashboardLayout></ProtectedRoute>} />
             <Route path="/applicant/virtual-interview" element={<ProtectedRoute allowedRole="applicant"><DashboardLayout><VirtualInterview /></DashboardLayout></ProtectedRoute>} />

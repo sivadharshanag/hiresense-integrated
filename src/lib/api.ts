@@ -610,6 +610,47 @@ export const interviewsApi = {
   },
 };
 
+// Notifications API
+export const notificationsApi = {
+  // Get all notifications
+  getAll: async (page = 1, limit = 20, unreadOnly = false): Promise<ApiResponse<any>> => {
+    return apiFetch<any>(`/api/notifications?page=${page}&limit=${limit}&unreadOnly=${unreadOnly}`);
+  },
+
+  // Get unread count
+  getUnreadCount: async (): Promise<ApiResponse<{ count: number }>> => {
+    return apiFetch<{ count: number }>('/api/notifications/unread-count');
+  },
+
+  // Mark single notification as read
+  markAsRead: async (id: string): Promise<ApiResponse<any>> => {
+    return apiFetch<any>(`/api/notifications/${id}/read`, {
+      method: 'PATCH',
+    });
+  },
+
+  // Mark all as read
+  markAllAsRead: async (): Promise<ApiResponse<any>> => {
+    return apiFetch<any>('/api/notifications/mark-all-read', {
+      method: 'PATCH',
+    });
+  },
+
+  // Delete a notification
+  delete: async (id: string): Promise<ApiResponse<any>> => {
+    return apiFetch<any>(`/api/notifications/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // Auto-apply from notification
+  autoApply: async (id: string): Promise<ApiResponse<any>> => {
+    return apiFetch<any>(`/api/notifications/${id}/auto-apply`, {
+      method: 'POST',
+    });
+  },
+};
+
 export default {
   auth: authApi,
   jobs: jobsApi,
@@ -619,4 +660,5 @@ export default {
   ai: aiApi,
   interviews: interviewsApi,
   talentPool: talentPoolApi,
+  notifications: notificationsApi,
 };
